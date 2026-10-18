@@ -22,6 +22,14 @@ function AppInner(): React.ReactElement {
     const saved = loadLocal();
     if (saved) {
       dispatch({ type: "restore", doc: saved });
+      if (!localStorage.getItem("design-studio-backup-hint")) {
+        localStorage.setItem("design-studio-backup-hint", "1");
+        dispatch({
+          type: "toast",
+          message: "문서는 이 브라우저에만 저장됩니다. '내보내기'로 JSON 백업을 만들어 보세요.",
+        });
+        window.setTimeout(() => dispatch({ type: "toast", message: null }), 6000);
+      }
     }
   }, [dispatch]);
 
