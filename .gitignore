@@ -3,3 +3,5 @@ dist/
 .omo/
 .DS_Store
 *.local
+.npmrc
+pnpm-workspace.yaml
