@@ -1,0 +1,5 @@
+packages:
+  - .
+enableGlobalVirtualStore: true
+packageImportMethod: clone-or-copy
+storeDir: /Users/young2026/Downloads/personal_project/.pnpm-store

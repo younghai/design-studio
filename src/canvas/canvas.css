@@ -1,0 +1,60 @@
+.canvas-viewport {
+  position: relative;
+  flex: 1;
+  overflow: hidden;
+  background: var(--ds-canvas-bg);
+  cursor: default;
+  user-select: none;
+}
+
+.canvas-viewport.panning {
+  cursor: grab;
+}
+
+.canvas-viewport.creating {
+  cursor: crosshair;
+}
+
+.canvas-surface {
+  position: absolute;
+  top: 0;
+  left: 0;
+  transform-origin: 0 0;
+}
+
+.canvas-node {
+  position: absolute;
+  box-sizing: border-box;
+}
+
+.canvas-node.selected {
+  outline: 1px solid var(--ds-selection);
+}
+
+.selection-overlay {
+  position: absolute;
+  pointer-events: none;
+  outline: 1.5px solid var(--ds-selection);
+  outline-offset: 0;
+}
+
+.selection-handle {
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  background: #ffffff;
+  border: 1px solid var(--ds-selection);
+  border-radius: 2px;
+  pointer-events: auto;
+}
+
+.canvas-statusbar {
+  position: absolute;
+  bottom: 8px;
+  right: 12px;
+  font-size: var(--font-size-sm);
+  color: var(--ds-text-dim);
+  background: rgba(30, 30, 30, 0.8);
+  padding: 2px 8px;
+  border-radius: 4px;
+}
