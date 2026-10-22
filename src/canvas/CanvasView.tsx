@@ -29,6 +29,7 @@ interface DragState {
   nodeH: number;
   panX0: number;
   panY0: number;
+  latest?: { dx: number; dy: number; w?: number; h?: number };
 }
 
 const HANDLE_CURSOR: Record<Handle, string> = {
@@ -258,7 +259,13 @@ export default function CanvasView(): React.ReactElement {
     handle?: Handle
   ): void {
     e.stopPropagation();
-    (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+    try {
+      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    } catch {
+      // Synthetic/embedded pointers have no active pointerId to capture.
+      // The viewport-level move/up handlers still receive events while the
+      // pointer stays inside the canvas.
+    }
     const p = toDoc(e);
     const base: DragState = {
       kind: "pan",
@@ -346,6 +353,8 @@ export default function CanvasView(): React.ReactElement {
     }
     if (!drag.id) return;
     if (drag.kind === "move") {
+      const next = { dx, dy };
+      drag.latest = next;
       setLive({ id: drag.id, dx, dy });
       return;
     }
@@ -368,35 +377,37 @@ export default function CanvasView(): React.ReactElement {
       hh = Math.max(1, drag.nodeH - dy);
       ddy = drag.nodeH - hh;
     }
+    const next = { dx: ddx, dy: ddy, w, h: hh };
+    drag.latest = next;
     setLive({ id: drag.id, dx: ddx, dy: ddy, w, h: hh });
   }
 
   function onPointerUp(): void {
     const drag = dragRef.current;
     dragRef.current = null;
-    if (!drag || !drag.id || !live || live.id !== drag.id) {
-      setLive(null);
+    setLive(null);
+    if (!drag || !drag.id || !drag.latest) {
       return;
     }
+    const latest = drag.latest;
     if (drag.kind === "move") {
-      if (live.dx !== 0 || live.dy !== 0) {
-        dispatch({ type: "move", id: drag.id, dx: live.dx, dy: live.dy });
+      if (latest.dx !== 0 || latest.dy !== 0) {
+        dispatch({ type: "move", id: drag.id, dx: latest.dx, dy: latest.dy });
       }
     } else if (drag.kind === "resize") {
       dispatch({
         type: "set-props",
         id: drag.id,
         patch: {
-          x: drag.nodeX + (live.dx ?? 0),
-          y: drag.nodeY + (live.dy ?? 0),
-          width: live.w ?? drag.nodeW,
-          height: live.h ?? drag.nodeH,
+          x: drag.nodeX + (latest.dx ?? 0),
+          y: drag.nodeY + (latest.dy ?? 0),
+          width: latest.w ?? drag.nodeW,
+          height: latest.h ?? drag.nodeH,
           sizingW: "fixed",
           sizingH: "fixed",
         },
       });
     }
-    setLive(null);
   }
 
   return (
