@@ -172,12 +172,18 @@ export function specNodeToNode(spec: SpecNode): StudioNode {
 }
 
 export function specToDocument(spec: SpecNode, mode: Mode = "dark"): Document {
+  const root = specNodeToNode(spec);
+  // A spec's root x/y are placement metadata from the source canvas (the
+  // easeui fixture ships at y=1200). In the editor the root IS the document
+  // origin, so normalize it to (0,0) or the whole screen renders off-view.
+  root.x = 0;
+  root.y = 0;
   return {
     schemaVersion: 1,
     name: spec.name ?? "Untitled",
     mode,
     collections: [CORE_COLLECTION, EASEUI_COLLECTION],
-    root: specNodeToNode(spec),
+    root,
   };
 }
 

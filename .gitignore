@@ -5,3 +5,5 @@ dist/
 *.local
 .npmrc
 pnpm-workspace.yaml
+test-results/
+playwright-report/
