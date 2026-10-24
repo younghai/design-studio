@@ -6,6 +6,10 @@
  *   깊이 순서로 나열되고, 파일 앞에 :root { --easeui-bg-panel: #161b22; ... } 변수 블록이 온다.
  * - Tailwind: 노드당 `absolute left-[28px] top-[28px] w-[1376px] h-[68px] bg-[var(--easeui-bg-panel)] ...`
  *   형태의 클래스 문자열이 한 줄로 나온다.
+ * - SwiftUI: `struct <PascalName>View: View` 안 ZStack에 노드당 RoundedRectangle/Text를
+ *   .frame(width:height:).position(x:y:) 절대 배치로 쌓는다. 색은 Color(red:green:blue:) 리터럴.
+ * - Compose: `@Composable fun <PascalName>()`의 Box(modifier) 안에 Text/Box를
+ *   Modifier.absoluteOffset(x:.dp, y:.dp)로 절대 배치한다. 색은 Color(0xAARRGGBB) 리터럴.
  */
 import type { Document, StudioNode } from "../model/types";
 import { resolveColor } from "../model/variables";
@@ -161,4 +165,129 @@ export function toTailwind(root: StudioNode, doc: Document): string {
     return [head, open, ...n.children.map((c) => line(c, depth + 1)), `${indent(depth)}</div>`].join("\n");
   }
   return [variablesBlock(doc), "", line(root, 0)].join("\n");
+}
+
+function hexToRgb(hex: string): { r: number; g: number; b: number } {
+  const h = hex.replace("#", "");
+  const full = h.length === 3 ? h.split("").map((c) => c + c).join("") : h.slice(0, 6);
+  const num = parseInt(full, 16);
+  return { r: ((num >> 16) & 255) / 255, g: ((num >> 8) & 255) / 255, b: (num & 255) / 255 };
+}
+
+function swiftColor(value: string | undefined, doc: Document): string {
+  const resolved = resolveColor(value, doc) ?? "#000000";
+  const { r, g, b } = hexToRgb(resolved);
+  const n = (v: number) => Math.round(v * 1000) / 1000;
+  return `Color(red: ${n(r)}, green: ${n(g)}, blue: ${n(b)})`;
+}
+
+export function toSwiftUI(root: StudioNode, doc: Document): string {
+  function shape(n: StudioNode, absX: number, absY: number, depth: number): string {
+    const pad = "    ".repeat(depth);
+    const lines: string[] = [`// ${n.name}`];
+    if (n.style.fill !== undefined || n.kind === "frame" || n.kind === "rect" || n.kind === "ellipse") {
+      const radius = n.style.radius === 999 || n.kind === "ellipse" ? Math.round(Math.min(n.width, n.height) / 2) : n.style.radius ?? 0;
+      lines.push(
+        `${pad}RoundedRectangle(cornerRadius: ${radius}, style: .continuous)`,
+        `${pad}    .fill(${n.style.fill !== undefined ? swiftColor(n.style.fill, doc) : "Color.clear"})`,
+        `${pad}    .frame(width: ${Math.round(n.width)}, height: ${Math.round(n.height)})`,
+        `${pad}    .position(x: ${Math.round(absX + n.width / 2)}, y: ${Math.round(absY + n.height / 2)})`
+      );
+      if (n.style.stroke && n.style.strokeWidth) {
+        lines.push(
+          `${pad}RoundedRectangle(cornerRadius: ${radius}, style: .continuous)`,
+          `${pad}    .stroke(${swiftColor(n.style.stroke, doc)}, lineWidth: ${n.style.strokeWidth})`,
+          `${pad}    .frame(width: ${Math.round(n.width)}, height: ${Math.round(n.height)})`,
+          `${pad}    .position(x: ${Math.round(absX + n.width / 2)}, y: ${Math.round(absY + n.height / 2)})`
+        );
+      }
+    }
+    if (n.text) {
+      const weight = n.text.fontWeight >= 700 ? ".bold" : n.text.fontWeight >= 600 ? ".semibold" : n.text.fontWeight >= 500 ? ".medium" : ".regular";
+      lines.push(
+        `${pad}Text("${n.text.text.replace(/"/g, '\\"')}")`,
+        `${pad}    .font(.system(size: ${n.text.fontSize}, weight: ${weight}))`,
+        `${pad}    .foregroundColor(${n.text.color ? swiftColor(n.text.color, doc) : "Color.primary"})`,
+        `${pad}    .position(x: ${Math.round(absX + n.width / 2)}, y: ${Math.round(absY + n.height / 2)})`
+      );
+    }
+    const out = [lines.join("\n")];
+    n.children.forEach((c) => out.push(shape(c, absX + c.x, absY + c.y, depth)));
+    return out.filter(Boolean).join("\n");
+  }
+
+  const name = pascal(root.name) || "Design";
+  return [
+    "import SwiftUI",
+    "",
+    `struct ${name}View: View {`,
+    "    var body: some View {",
+    "        ZStack {",
+    shape(root, 0, 0, 3),
+    "        }",
+    "    }",
+    "}",
+    "",
+    `#Preview { ${name}View() }`,
+  ].join("\n");
+}
+
+function composeColor(value: string | undefined, doc: Document): string {
+  const resolved = resolveColor(value, doc) ?? "#000000";
+  const h = resolved.replace("#", "");
+  const full = h.length === 3 ? h.split("").map((c) => c + c).join("") : h.slice(0, 6);
+  return `Color(0xFF${full.toUpperCase()})`;
+}
+
+export function toCompose(root: StudioNode, doc: Document): string {
+  function element(n: StudioNode, absX: number, absY: number, depth: number): string {
+    const pad = "    ".repeat(depth);
+    const parts: string[] = [`${pad}// ${n.name}`];
+    if (n.text) {
+      parts.push(
+        `${pad}Text(`,
+        `${pad}    text = "${n.text.text.replace(/"/g, '\\"')}",`,
+        `${pad}    fontSize = ${n.text.fontSize}.sp,`,
+        `${pad}    fontWeight = FontWeight.W${n.text.fontWeight},`,
+        `${pad}    color = ${n.text.color ? composeColor(n.text.color, doc) : "Color.Unspecified"},`,
+        `${pad}    modifier = Modifier.absoluteOffset(x = ${Math.round(absX)}.dp, y = ${Math.round(absY)}.dp)`,
+        `${pad})`
+      );
+    } else {
+      parts.push(
+        `${pad}Box(`,
+        `${pad}    modifier = Modifier`,
+        `${pad}        .size(${Math.round(n.width)}.dp, ${Math.round(n.height)}.dp)`,
+        `${pad}        .absoluteOffset(x = ${Math.round(absX)}.dp, y = ${Math.round(absY)}.dp)`,
+        ...(n.style.fill !== undefined
+          ? [`${pad}        .background(${composeColor(n.style.fill, doc)}, shape = RoundedCornerShape(${n.style.radius ?? 0}.dp))`]
+          : []),
+        `${pad})`
+      );
+    }
+    const out = [parts.filter(Boolean).join("\n")];
+    n.children.forEach((c) => out.push(element(c, absX + c.x, absY + c.y, depth)));
+    return out.filter(Boolean).join("\n");
+  }
+
+  const name = pascal(root.name) || "Design";
+  return [
+    "import androidx.compose.foundation.background",
+    "import androidx.compose.foundation.layout.*",
+    "import androidx.compose.foundation.shape.RoundedCornerShape",
+    "import androidx.compose.material.Text",
+    "import androidx.compose.runtime.Composable",
+    "import androidx.compose.ui.Modifier",
+    "import androidx.compose.ui.graphics.Color",
+    "import androidx.compose.ui.text.font.FontWeight",
+    "import androidx.compose.ui.unit.dp",
+    "import androidx.compose.ui.unit.sp",
+    "",
+    "@Composable",
+    `fun ${name}(modifier: Modifier = Modifier) {`,
+    "    Box(modifier) {",
+    element(root, 0, 0, 2),
+    "    }",
+    "}",
+  ].join("\n");
 }

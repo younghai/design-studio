@@ -1,15 +1,17 @@
 import React, { useMemo, useState } from "react";
 import { findNode, useStore } from "../state/store";
 import { relayoutTree } from "../model/relayout";
-import { toCss, toReact, toTailwind } from "./codegen";
+import { toCompose, toCss, toReact, toSwiftUI, toTailwind } from "./codegen";
 import "../panels/panels.css";
 
-type Target = "react" | "css" | "tailwind";
+type Target = "react" | "css" | "tailwind" | "swiftui" | "compose";
 
 const TABS: { id: Target; label: string }[] = [
   { id: "react", label: "React" },
   { id: "css", label: "CSS" },
   { id: "tailwind", label: "Tailwind" },
+  { id: "swiftui", label: "SwiftUI" },
+  { id: "compose", label: "Compose" },
 ];
 
 export default function CodegenPanel(): React.ReactElement {
@@ -24,7 +26,9 @@ export default function CodegenPanel(): React.ReactElement {
   const code = useMemo(() => {
     if (target === "react") return toReact(selected, state.doc);
     if (target === "css") return toCss(selected, state.doc);
-    return toTailwind(selected, state.doc);
+    if (target === "tailwind") return toTailwind(selected, state.doc);
+    if (target === "swiftui") return toSwiftUI(selected, state.doc);
+    return toCompose(selected, state.doc);
   }, [selected, state.doc, target]);
 
   function copy(): void {

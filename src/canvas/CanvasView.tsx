@@ -137,14 +137,19 @@ interface NodeViewProps {
   doc: Document;
   live: LiveOverride | null;
   selectedId: string | null;
+  editId: string | null;
   interactive: boolean;
   onNodePointerDown: (e: React.PointerEvent, node: StudioNode) => void;
   onHandlePointerDown: (e: React.PointerEvent, node: StudioNode, handle: Handle) => void;
+  onEditStart: (id: string) => void;
+  onEditCommit: (id: string, value: string) => void;
+  onEditCancel: () => void;
 }
 
 function NodeView(props: NodeViewProps): React.ReactElement {
-  const { node, doc, live, selectedId, interactive, onNodePointerDown, onHandlePointerDown } = props;
+  const { node, doc, live, selectedId, editId, interactive, onNodePointerDown, onHandlePointerDown, onEditStart, onEditCommit, onEditCancel } = props;
   const selected = selectedId === node.id;
+  const editing = editId === node.id;
   const style = nodeStyle(node, doc, live);
   const isText = node.kind === "text";
   const textColor = resolveColor(node.text?.color, doc);
@@ -153,27 +158,70 @@ function NodeView(props: NodeViewProps): React.ReactElement {
     <div
       className={`canvas-node${selected ? " selected" : ""}`}
       style={style}
-      onPointerDown={interactive ? (e) => onNodePointerDown(e, node) : undefined}
+      onPointerDown={interactive && !editing ? (e) => onNodePointerDown(e, node) : undefined}
+      onDoubleClick={
+        interactive && !editing && node.text
+          ? (e) => {
+              e.stopPropagation();
+              onEditStart(node.id);
+            }
+          : undefined
+      }
     >
-      {(isText || node.text) && (
-        <span
-          style={{
-            fontSize: node.text?.fontSize,
-            fontWeight: node.text?.fontWeight,
-            color: textColor,
-            lineHeight: node.text?.lineHeight ?? 1.3,
-            whiteSpace: "pre",
-            padding: isText ? 0 : "0 8px",
-            display: "block",
-          }}
-        >
-          {node.text?.text}
-        </span>
-      )}
+      {(isText || node.text) &&
+        (editing ? (
+          <textarea
+            autoFocus
+            defaultValue={node.text?.text}
+            style={{
+              position: "absolute",
+              inset: 0,
+              width: "100%",
+              height: "100%",
+              fontSize: node.text?.fontSize,
+              fontWeight: node.text?.fontWeight,
+              color: textColor,
+              lineHeight: node.text?.lineHeight ?? 1.3,
+              background: "rgba(0, 0, 0, 0.4)",
+              border: "1px solid var(--ds-selection)",
+              borderRadius: 2,
+              padding: 0,
+              margin: 0,
+              resize: "none",
+              overflow: "hidden",
+              fontFamily: "inherit",
+            }}
+            onPointerDown={(e) => e.stopPropagation()}
+            onBlur={(e) => onEditCommit(node.id, e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                onEditCommit(node.id, (e.target as HTMLTextAreaElement).value);
+              } else if (e.key === "Escape") {
+                e.preventDefault();
+                onEditCancel();
+              }
+            }}
+          />
+        ) : (
+          <span
+            style={{
+              fontSize: node.text?.fontSize,
+              fontWeight: node.text?.fontWeight,
+              color: textColor,
+              lineHeight: node.text?.lineHeight ?? 1.3,
+              whiteSpace: "pre",
+              padding: isText ? 0 : "0 8px",
+              display: "block",
+            }}
+          >
+            {node.text?.text}
+          </span>
+        ))}
       {node.children.map((c) => (
         <NodeView key={c.id} {...props} node={c} />
       ))}
-      {selected && interactive && (
+      {selected && interactive && !editing && (
         <>
           {(Object.keys(HANDLE_POS) as Handle[]).map((h) => (
             <div
@@ -196,6 +244,7 @@ export default function CanvasView(): React.ReactElement {
   const spaceRef = useRef(false);
   const [live, setLive] = useState<LiveOverride | null>(null);
   const [spaceDown, setSpaceDown] = useState(false);
+  const [editId, setEditId] = useState<string | null>(null);
 
   const placed = useMemo(() => relayoutTree(state.doc.root), [state.doc.root]);
   const interactive = state.tool === "select";
@@ -427,9 +476,16 @@ export default function CanvasView(): React.ReactElement {
           doc={state.doc}
           live={live}
           selectedId={state.selectedId === placed.id ? null : state.selectedId}
+          editId={editId}
           interactive={interactive}
           onNodePointerDown={onNodePointerDown}
           onHandlePointerDown={onHandlePointerDown}
+          onEditStart={setEditId}
+          onEditCommit={(id, value) => {
+            dispatch({ type: "set-props", id, patch: { text: { text: value } } });
+            setEditId(null);
+          }}
+          onEditCancel={() => setEditId(null)}
         />
       </div>
       <div className="canvas-statusbar">

@@ -40,6 +40,8 @@ export type Action =
   | { type: "set-devmode"; on: boolean }
   | { type: "set-viewport"; zoom?: number; panX?: number; panY?: number }
   | { type: "toast"; message: string | null }
+  | { type: "copy"; id: string }
+  | { type: "paste" }
   | { type: "load-document"; doc: Document }
   | { type: "restore"; doc: Document }
   | { type: "undo" }
@@ -54,6 +56,7 @@ export interface AppState {
   panX: number;
   panY: number;
   toast: string | null;
+  clipboard: StudioNode | null;
   undoStack: Document[];
   redoStack: Document[];
 }
@@ -82,6 +85,16 @@ function reId(node: StudioNode): StudioNode {
     ...node,
     id: `${node.id}-${Math.random().toString(36).slice(2, 8)}`,
     children: node.children.map(reId),
+  };
+}
+
+function deepClone(node: StudioNode): StudioNode {
+  return {
+    ...node,
+    style: { ...node.style },
+    text: node.text ? { ...node.text } : undefined,
+    layout: node.layout ? { ...node.layout, padding: [...node.layout.padding] as [number, number, number, number] } : undefined,
+    children: node.children.map(deepClone),
   };
 }
 
@@ -124,6 +137,23 @@ export function reducer(state: AppState, action: Action): AppState {
       };
     case "toast":
       return { ...state, toast: action.message };
+    case "copy": {
+      const hit = findNode(state.doc.root, action.id);
+      if (!hit) return state;
+      return { ...state, clipboard: deepClone(hit.node) };
+    }
+    case "paste": {
+      if (!state.clipboard) return state;
+      const copy = reId({ ...state.clipboard, x: state.clipboard.x + 20, y: state.clipboard.y + 20 });
+      const doc = {
+        ...state.doc,
+        root: mapTree(state.doc.root, state.doc.root.id, (p) => ({
+          ...p,
+          children: [...p.children, copy],
+        })),
+      };
+      return { ...state, ...withUndo(state, doc), selectedId: copy.id };
+    }
     case "set-mode":
       return { ...state, doc: { ...state.doc, mode: action.mode } };
     case "set-variable": {
@@ -295,6 +325,7 @@ export function makeInitialState(): AppState {
     panX: 40,
     panY: 40,
     toast: null,
+    clipboard: null,
     undoStack: [],
     redoStack: [],
   };

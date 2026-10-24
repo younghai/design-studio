@@ -129,3 +129,91 @@ test("export triggers a download of the current document", async ({ page }) => {
   ]);
   expect(download.suggestedFilename()).toMatch(/easeui.*\.design\.json$/i);
 });
+
+test("copy/paste duplicates the selected node with ⌘C ⌘V", async ({ page }) => {
+  await page.goto("/");
+  await page.locator(".layer-row").first().waitFor();
+  const before = await canvasNodeCount(page);
+
+  await page.locator(".layer-name").filter({ hasText: "Brand Title" }).click();
+  await page.keyboard.press("ControlOrMeta+c");
+  await page.keyboard.press("ControlOrMeta+v");
+  await expect(canvasNodeCount(page)).resolves.toBe(before + 1);
+
+  const copies = page.locator(".layer-name").filter({ hasText: "Brand Title" });
+  await expect(copies).toHaveCount(2);
+  await page.keyboard.press("ControlOrMeta+z");
+  await expect(canvasNodeCount(page)).resolves.toBe(before);
+});
+
+test("cut removes the node and paste restores it elsewhere", async ({ page }) => {
+  await page.goto("/");
+  await page.locator(".layer-row").first().waitFor();
+  const before = await canvasNodeCount(page);
+
+  await page.locator(".layer-name").filter({ hasText: "Brand Title" }).click();
+  await page.keyboard.press("ControlOrMeta+x");
+  await expect(canvasNodeCount(page)).resolves.toBe(before - 1);
+
+  await page.keyboard.press("ControlOrMeta+v");
+  await expect(canvasNodeCount(page)).resolves.toBe(before);
+  await expect(page.locator(".layer-name").filter({ hasText: "Brand Title" })).toHaveCount(1);
+});
+
+test("double-click opens inline text editing and Enter commits", async ({ page }) => {
+  await page.goto("/");
+  await page.locator(".layer-row").first().waitFor();
+
+  // hasText is case-insensitive and also matches the document title
+  // ("Agent-First Spec Console"); a case-sensitive regex pins the span.
+  const span = page.locator(".canvas-node > span").filter({ hasText: /AGENT-FIRST SPEC CONSOLE/ });
+  await expect(span).toHaveCount(1);
+  await span.dblclick();
+  const editor = page.locator(".canvas-node textarea");
+  await expect(editor).toBeVisible();
+  await editor.fill("EDITED VIA INLINE");
+  await editor.press("Enter");
+  await expect(page.locator(".canvas-node > span").filter({ hasText: /EDITED VIA INLINE/ })).toHaveCount(1);
+  await expect(page.locator(".canvas-node textarea")).toHaveCount(0);
+});
+
+test("SVG export downloads an svg of the selection", async ({ page }) => {
+  await page.goto("/");
+  await page.locator(".layer-row").first().waitFor();
+
+  await page.locator(".layer-name").filter({ hasText: "Brand Title" }).click();
+  const [download] = await Promise.all([
+    page.waitForEvent("download"),
+    page.getByRole("button", { name: "SVG", exact: true }).click(),
+  ]);
+  expect(download.suggestedFilename()).toBe("brand-title.svg");
+});
+
+test("PNG export downloads a rasterized selection", async ({ page }) => {
+  await page.goto("/");
+  await page.locator(".layer-row").first().waitFor();
+
+  await page.locator(".layer-name").filter({ hasText: "Brand Title" }).click();
+  const [download] = await Promise.all([
+    page.waitForEvent("download"),
+    page.getByRole("button", { name: "PNG", exact: true }).click(),
+  ]);
+  expect(download.suggestedFilename()).toBe("brand-title.png");
+});
+
+test("dev mode generates SwiftUI and Compose targets", async ({ page }) => {
+  await page.goto("/");
+  await page.locator(".layer-row").first().waitFor();
+
+  await page.locator(".layer-name").filter({ hasText: "Brand Title" }).click();
+  await page.keyboard.press("Shift+d");
+  await expect(page.locator(".inspector-panel .panel-header")).toContainText("Dev Mode");
+
+  await page.getByRole("button", { name: "SwiftUI", exact: true }).click();
+  await expect(page.locator(".inspector-panel pre")).toContainText("Text(");
+  await expect(page.locator(".inspector-panel pre")).toContainText(".font(.system(size:");
+
+  await page.getByRole("button", { name: "Compose", exact: true }).click();
+  await expect(page.locator(".inspector-panel pre")).toContainText("@Composable");
+  await expect(page.locator(".inspector-panel pre")).toContainText("Modifier.absoluteOffset");
+});

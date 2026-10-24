@@ -31,6 +31,22 @@ export function useShortcuts(): void {
         if (state.selectedId) dispatch({ type: "duplicate", id: state.selectedId });
         return;
       }
+      if (meta && e.key.toLowerCase() === "c" && state.selectedId) {
+        e.preventDefault();
+        dispatch({ type: "copy", id: state.selectedId });
+        return;
+      }
+      if (meta && e.key.toLowerCase() === "x" && state.selectedId) {
+        e.preventDefault();
+        dispatch({ type: "copy", id: state.selectedId });
+        dispatch({ type: "delete", id: state.selectedId });
+        return;
+      }
+      if (meta && e.key.toLowerCase() === "v") {
+        e.preventDefault();
+        dispatch({ type: "paste" });
+        return;
+      }
       if ((e.key === "Delete" || e.key === "Backspace") && state.selectedId) {
         e.preventDefault();
         dispatch({ type: "delete", id: state.selectedId });

@@ -1,8 +1,10 @@
 import React, { useRef } from "react";
-import { useStore } from "../state/store";
+import { findNode, useStore } from "../state/store";
 import type { Tool } from "../state/store";
 import { exportDocument, importDocumentFile, readSpecFile } from "../io/documentIo";
+import { downloadPng, downloadSvg, nodeToSvg } from "../io/imageExport";
 import { specToDocument } from "../model/fixtures";
+import { relayoutTree } from "../model/relayout";
 import "./panels.css";
 
 const TOOLS: { id: Tool; label: string; key: string }[] = [
@@ -26,6 +28,23 @@ export default function Toolbar({ variablesOpen, onToggleVariables }: ToolbarPro
   function toast(message: string): void {
     dispatch({ type: "toast", message });
     window.setTimeout(() => dispatch({ type: "toast", message: null }), 2600);
+  }
+
+  function exportImage(kind: "svg" | "png"): void {
+    const placed = relayoutTree(state.doc.root);
+    const hit = state.selectedId ? findNode(placed, state.selectedId) : null;
+    const target = hit?.node ?? placed;
+    const base = target.name.replace(/\s+/g, "-").toLowerCase() || "node";
+    const svg = nodeToSvg(target, state.doc);
+    if (kind === "svg") {
+      downloadSvg(svg, `${base}.svg`);
+      toast(`${base}.svg 내보냈습니다`);
+    } else {
+      downloadPng(svg, `${base}.png`).then(
+        () => toast(`${base}.png 내보냈습니다`),
+        (err) => toast(`PNG 내보내기 실패: ${(err as Error).message}`)
+      );
+    }
   }
 
   return (
@@ -73,6 +92,8 @@ export default function Toolbar({ variablesOpen, onToggleVariables }: ToolbarPro
           Spec 적용
         </button>
         <button onClick={() => exportDocument(state.doc)}>내보내기</button>
+        <button title="선택 노드 SVG 내보내기" onClick={() => exportImage("svg")}>SVG</button>
+        <button title="선택 노드 PNG 내보내기" onClick={() => exportImage("png")}>PNG</button>
         <button onClick={() => docInputRef.current?.click()}>가져오기</button>
       </div>
       <input
