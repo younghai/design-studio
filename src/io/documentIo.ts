@@ -2,12 +2,48 @@ import type { Document, StudioNode } from "../model/types";
 
 export const STORAGE_KEY = "design-studio-doc-v1";
 
+// Guards unbounded recursion (stack overflow) from adversarial or corrupted
+// nested input at the parse boundary.
+export const MAX_NODE_DEPTH = 64;
+
 export type SpecValidation =
   | { ok: true; spec: Record<string, unknown> }
   | { ok: false; errors: string[] };
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+const NODE_KINDS = ["frame", "text", "rect", "ellipse"];
+
+function validateNode(input: unknown, depth: number, errors: string[]): void {
+  if (depth > MAX_NODE_DEPTH) {
+    errors.push(`중첩 깊이가 ${MAX_NODE_DEPTH}을 초과합니다`);
+    return;
+  }
+  if (!isRecord(input)) {
+    errors.push("노드가 JSON 객체가 아닙니다");
+    return;
+  }
+  if (input.kind !== undefined && !NODE_KINDS.includes(String(input.kind))) {
+    errors.push(`kind는 ${NODE_KINDS.join("|")} 중 하나여야 합니다`);
+  }
+  for (const field of ["x", "y", "width", "height", "radius", "font_size", "font_weight"] as const) {
+    if (input[field] !== undefined && typeof input[field] !== "number") {
+      errors.push(`${field}는 숫자여야 합니다`);
+    }
+  }
+  if (input.children !== undefined) {
+    if (!Array.isArray(input.children)) {
+      errors.push("children는 배열이어야 합니다");
+    } else {
+      input.children.forEach((c, i) => {
+        const before = errors.length;
+        validateNode(c, depth + 1, errors);
+        if (errors.length > before) errors.splice(before, 0, `children[${i}]:`);
+      });
+    }
+  }
 }
 
 export function validateSpec(input: unknown): SpecValidation {
@@ -18,28 +54,13 @@ export function validateSpec(input: unknown): SpecValidation {
   if (input.name !== undefined && typeof input.name !== "string") {
     errors.push("name은 문자열이어야 합니다");
   }
-  if (input.width !== undefined && typeof input.width !== "number") {
-    errors.push("width는 숫자여야 합니다");
-  }
-  if (input.height !== undefined && typeof input.height !== "number") {
-    errors.push("height는 숫자여야 합니다");
-  }
+  validateNode(input, 0, errors);
   if (input.layout !== undefined) {
     if (
       !isRecord(input.layout) ||
       (input.layout.dir !== undefined && input.layout.dir !== "row" && input.layout.dir !== "column")
     ) {
       errors.push("layout.dir은 row 또는 column이어야 합니다");
-    }
-  }
-  if (input.children !== undefined) {
-    if (!Array.isArray(input.children)) {
-      errors.push("children는 배열이어야 합니다");
-    } else {
-      input.children.forEach((c, i) => {
-        const child = validateSpec(c);
-        if (!child.ok) errors.push(`children[${i}]: ${child.errors.join(", ")}`);
-      });
     }
   }
   return errors.length > 0 ? { ok: false, errors } : { ok: true, spec: input };
@@ -54,6 +75,13 @@ export function validateDocument(input: unknown): { ok: true; doc: Document } | 
   if (!Array.isArray(input.collections)) return { ok: false, errors: ["collections가 배열이 아닙니다"] };
   if (input.mode !== "light" && input.mode !== "dark") {
     return { ok: false, errors: ["mode는 light 또는 dark이어야 합니다"] };
+  }
+  // localStorage restore feeds straight into the render tree; an unvalidated
+  // root would crash every reload until the user clears storage manually.
+  const nodeErrors: string[] = [];
+  validateNode(input.root, 0, nodeErrors);
+  if (nodeErrors.length > 0) {
+    return { ok: false, errors: [`root가 손상되었습니다: ${nodeErrors.slice(0, 3).join(", ")}`] };
   }
   return { ok: true, doc: input as unknown as Document };
 }

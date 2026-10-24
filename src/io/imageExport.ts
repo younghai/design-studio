@@ -5,20 +5,26 @@ function esc(text: string): string {
   return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
+// Attribute values (fill/stroke/color) can carry arbitrary spec strings;
+// escaping blocks breakout like: red" onload="alert(1)
+function attr(value: string): string {
+  return esc(value);
+}
+
 function shapeSvg(n: StudioNode, doc: Document, absX: number, absY: number): string {
   const fill = resolveColor(n.style.fill, doc) ?? "none";
   const stroke = resolveColor(n.style.stroke, doc);
   const strokeWidth = n.style.strokeWidth ?? 0;
   const opacity = n.style.opacity ?? 1;
-  const common = `opacity="${opacity}"${stroke ? ` stroke="${stroke}" stroke-width="${strokeWidth}"` : ""}`;
+  const common = `opacity="${opacity}"${stroke ? ` stroke="${attr(stroke)}" stroke-width="${strokeWidth}"` : ""}`;
   const w = Math.max(0, n.width);
   const h = Math.max(0, n.height);
 
   let shape: string;
   if (n.kind === "ellipse") {
-    shape = `<ellipse cx="${absX + w / 2}" cy="${absY + h / 2}" rx="${w / 2}" ry="${h / 2}" fill="${fill}" ${common}/>`;
+    shape = `<ellipse cx="${absX + w / 2}" cy="${absY + h / 2}" rx="${w / 2}" ry="${h / 2}" fill="${attr(fill)}" ${common}/>`;
   } else {
-    shape = `<rect x="${absX}" y="${absY}" width="${w}" height="${h}" rx="${n.style.radius ?? 0}" fill="${fill}" ${common}/>`;
+    shape = `<rect x="${absX}" y="${absY}" width="${w}" height="${h}" rx="${n.style.radius ?? 0}" fill="${attr(fill)}" ${common}/>`;
   }
 
   let textSvg = "";
@@ -26,7 +32,7 @@ function shapeSvg(n: StudioNode, doc: Document, absX: number, absY: number): str
     const color = resolveColor(n.text.color, doc) ?? "#000000";
     const baseline = absY + (n.kind === "text" ? n.text.fontSize * 1.0 : h / 2 + n.text.fontSize * 0.35);
     const tx = n.kind === "text" ? absX : absX + 8;
-    textSvg = `<text x="${tx}" y="${baseline}" font-family="Inter, sans-serif" font-size="${n.text.fontSize}" font-weight="${n.text.fontWeight}" fill="${color}">${esc(n.text.text)}</text>`;
+    textSvg = `<text x="${tx}" y="${baseline}" font-family="Inter, sans-serif" font-size="${n.text.fontSize}" font-weight="${n.text.fontWeight}" fill="${attr(color)}">${esc(n.text.text)}</text>`;
   }
   return shape + textSvg;
 }

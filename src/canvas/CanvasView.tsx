@@ -54,9 +54,17 @@ const HANDLE_POS: Record<Handle, { left: string; top: string; transform: string 
   w: { left: "0%", top: "50%", transform: "translate(-50%, -50%)" },
 };
 
+// Date.now() collides for two creations in the same millisecond (fast clicks,
+// automated input); a module counter is unique for this session.
+let createSeq = 0;
+function uid(): string {
+  createSeq += 1;
+  return `c${Date.now()}-${createSeq}`;
+}
+
 const NEW_NODE_DEFAULTS: Record<Exclude<Tool, "select">, () => StudioNode> = {
   frame: () => ({
-    id: `c${Date.now()}`,
+    id: uid(),
     name: "Frame",
     kind: "frame",
     x: 0,
@@ -70,7 +78,7 @@ const NEW_NODE_DEFAULTS: Record<Exclude<Tool, "select">, () => StudioNode> = {
     children: [],
   }),
   text: () => ({
-    id: `c${Date.now()}`,
+    id: uid(),
     name: "Text",
     kind: "text",
     x: 0,
@@ -85,7 +93,7 @@ const NEW_NODE_DEFAULTS: Record<Exclude<Tool, "select">, () => StudioNode> = {
     children: [],
   }),
   rect: () => ({
-    id: `c${Date.now()}`,
+    id: uid(),
     name: "Rectangle",
     kind: "rect",
     x: 0,
@@ -99,7 +107,7 @@ const NEW_NODE_DEFAULTS: Record<Exclude<Tool, "select">, () => StudioNode> = {
     children: [],
   }),
   ellipse: () => ({
-    id: `c${Date.now()}`,
+    id: uid(),
     name: "Ellipse",
     kind: "ellipse",
     x: 0,

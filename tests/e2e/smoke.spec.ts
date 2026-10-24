@@ -130,8 +130,21 @@ test("export triggers a download of the current document", async ({ page }) => {
   expect(download.suggestedFilename()).toMatch(/easeui.*\.design\.json$/i);
 });
 
-test("copy/paste duplicates the selected node with ⌘C ⌘V", async ({ page }) => {
+test("duplicate (⌘D) places a sibling copy next to the selection", async ({ page }) => {
   await page.goto("/");
+  await page.locator(".layer-row").first().waitFor();
+  const before = await canvasNodeCount(page);
+
+  await page.locator(".layer-name").filter({ hasText: "Brand Title" }).click();
+  await page.keyboard.press("ControlOrMeta+d");
+  await expect(canvasNodeCount(page)).resolves.toBe(before + 1);
+  await expect(page.locator(".layer-name").filter({ hasText: "Brand Title" })).toHaveCount(2);
+
+  await page.keyboard.press("ControlOrMeta+z");
+  await expect(canvasNodeCount(page)).resolves.toBe(before);
+});
+
+test("copy/paste duplicates the selected node with ⌘C ⌘V", async ({ page }) => {  await page.goto("/");
   await page.locator(".layer-row").first().waitFor();
   const before = await canvasNodeCount(page);
 
@@ -216,4 +229,93 @@ test("dev mode generates SwiftUI and Compose targets", async ({ page }) => {
   await page.getByRole("button", { name: "Compose", exact: true }).click();
   await expect(page.locator(".inspector-panel pre")).toContainText("@Composable");
   await expect(page.locator(".inspector-panel pre")).toContainText("Modifier.absoluteOffset");
+});
+
+test("deeply nested adversarial spec is rejected without crashing", async ({ page }) => {
+  await page.goto("/");
+  await page.locator(".layer-row").first().waitFor();
+  const before = await canvasNodeCount(page);
+
+  let deep: Record<string, unknown> = { name: "Leaf", kind: "text" };
+  // Above the MAX_NODE_DEPTH=64 rejection threshold, below Node's own
+  // JSON.stringify recursion limit.
+  for (let i = 0; i < 200; i += 1) {
+    deep = { name: `N${i}`, kind: "frame", children: [deep] };
+  }
+  await page.setInputFiles(".toolbar input[type=file] >> nth=0", {
+    name: "deep.spec.json",
+    mimeType: "application/json",
+    buffer: Buffer.from(JSON.stringify(deep)),
+  });
+  await expect(page.locator(".toast")).toContainText("스펙 거부", { timeout: 5000 });
+  expect(await canvasNodeCount(page)).toBe(before);
+});
+
+test("corrupted localStorage is discarded instead of crash-looping", async ({ page }) => {
+  await page.goto("/");
+  await page.locator(".layer-row").first().waitFor();
+
+  await page.evaluate(() => {
+    const poisoned = {
+      schemaVersion: 1,
+      name: "Poison",
+      mode: "dark",
+      collections: [],
+      root: { id: "r", name: "Poison", kind: "frame", x: 0, y: 0, width: 10, height: 10, children: "not-an-array" },
+    };
+    localStorage.setItem("design-studio-doc-v1", JSON.stringify(poisoned));
+  });
+  await page.reload();
+  await page.locator(".canvas-statusbar").waitFor({ timeout: 5000 });
+  // Restore dropped the poisoned doc; the fixture loads instead of an error screen.
+  await expect(page.locator(".canvas-statusbar")).toContainText("EaseUI");
+  await expect(canvasNodeCount(page)).resolves.toBe(53);
+});
+
+test("SVG export escapes attribute injection from spec fills", async ({ page }) => {
+  await page.goto("/");
+  await page.locator(".layer-row").first().waitFor();
+
+  const malicious = {
+    name: "XSS Screen",
+    width: 100,
+    height: 100,
+    fill: 'red" onload="alert(1)',
+    children: [],
+  };
+  await page.setInputFiles(".toolbar input[type=file] >> nth=0", {
+    name: "xss.spec.json",
+    mimeType: "application/json",
+    buffer: Buffer.from(JSON.stringify(malicious)),
+  });
+  await expect(page.locator(".canvas-statusbar")).toContainText("XSS Screen", { timeout: 5000 });
+
+  const [download] = await Promise.all([
+    page.waitForEvent("download"),
+    page.getByRole("button", { name: "SVG", exact: true }).click(),
+  ]);
+  const path = await download.path();
+  const svg = path ? (await import("node:fs")).readFileSync(path, "utf8") : "";
+  expect(svg).toContain("fill=");
+  expect(svg).not.toContain('onload="');
+});
+
+test("rapid same-millisecond creates get unique ids", async ({ page }) => {
+  await page.goto("/");
+  await page.locator(".layer-row").first().waitFor();
+  const before = await canvasNodeCount(page);
+
+  await page.getByRole("button", { name: "F", exact: true }).click();
+  await page.locator(".canvas-viewport").click({ position: { x: 100, y: 200 } });
+  await page.getByRole("button", { name: "F", exact: true }).click();
+  await page.locator(".canvas-viewport").click({ position: { x: 400, y: 200 } });
+  await expect(canvasNodeCount(page)).resolves.toBe(before + 2);
+  await expect(page.locator(".layer-name").filter({ hasText: "Frame" })).toHaveCount(2);
+
+  // Both must be independently selectable (duplicate ids would collapse this).
+  const frames = page.locator(".layer-name").filter({ hasText: "Frame" });
+  await frames.nth(0).click();
+  await expect(page.locator(".canvas-node.selected")).toHaveCount(1);
+  await frames.nth(1).click();
+  await expect(page.locator(".canvas-node.selected")).toHaveCount(1);
 });

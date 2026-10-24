@@ -67,12 +67,19 @@ export function findNode(
   root: StudioNode,
   id: string
 ): { node: StudioNode; parent: StudioNode | null; index: number } | null {
-  if (root.id === id) return { node: root, parent: null, index: 0 };
-  for (let i = 0; i < root.children.length; i += 1) {
-    const hit = findNode(root.children[i], id);
-    if (hit) return hit;
+  // The match must thread its actual parent up the recursion; returning
+  // parent:null at each level silently broke duplicate/reorder/copy.
+  function walk(node: StudioNode, parent: StudioNode | null): { node: StudioNode; parent: StudioNode | null; index: number } | null {
+    if (node.id === id) {
+      return { node, parent, index: parent ? parent.children.indexOf(node) : 0 };
+    }
+    for (const child of node.children) {
+      const hit = walk(child, node);
+      if (hit) return hit;
+    }
+    return null;
   }
-  return null;
+  return walk(root, null);
 }
 
 export function mapTree(node: StudioNode, id: string, fn: (n: StudioNode) => StudioNode): StudioNode {
@@ -139,7 +146,9 @@ export function reducer(state: AppState, action: Action): AppState {
       return { ...state, toast: action.message };
     case "copy": {
       const hit = findNode(state.doc.root, action.id);
-      if (!hit) return state;
+      // The root IS the document; pasting a document inside itself duplicates
+      // the whole tree (same guard the duplicate action uses).
+      if (!hit || !hit.parent) return state;
       return { ...state, clipboard: deepClone(hit.node) };
     }
     case "paste": {
