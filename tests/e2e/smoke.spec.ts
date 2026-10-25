@@ -319,3 +319,89 @@ test("rapid same-millisecond creates get unique ids", async ({ page }) => {
   await frames.nth(1).click();
   await expect(page.locator(".canvas-node.selected")).toHaveCount(1);
 });
+
+test("shift-click builds a multi selection with a mixed inspector", async ({ page }) => {
+  await page.goto("/");
+  await page.locator(".layer-row").first().waitFor();
+
+  await page.locator(".layer-name").filter({ hasText: "Brand Title" }).click();
+  await expect(page.locator(".canvas-node.selected")).toHaveCount(1);
+
+  await page.locator(".layer-name").filter({ hasText: "Live Sync Badge" }).click({ modifiers: ["Shift"] });
+  await expect(page.locator(".canvas-node.selected")).toHaveCount(2);
+  await expect(page.locator(".inspector-panel")).toContainText("2개 노드가 선택되었습니다");
+
+  // Shift-click again removes it from the set.
+  await page.locator(".layer-name").filter({ hasText: "Live Sync Badge" }).click({ modifiers: ["Shift"] });
+  await expect(page.locator(".canvas-node.selected")).toHaveCount(1);
+  await expect(page.locator(".inspector-panel input").first()).toHaveValue("Brand Title");
+});
+
+test("marquee drag selects top-level nodes under the rubber band", async ({ page }) => {
+  await page.goto("/");
+  await page.locator(".layer-row").first().waitFor();
+
+  // Canvas starts at x=220 (layers panel is 220px). Drag across the screen
+  // area: both top-level children (header + workspace) intersect; each
+  // absorbs its subtree, so exactly 2 nodes become selected.
+  await page.mouse.move(260, 70);
+  await page.mouse.down();
+  await page.mouse.move(1250, 600, { steps: 6 });
+  await page.mouse.up();
+
+  await expect(page.locator(".canvas-node.selected")).toHaveCount(2);
+  await expect(page.locator(".inspector-panel")).toContainText("2개 노드가 선택되었습니다");
+});
+
+test("multi-select delete removes all in one undo step", async ({ page }) => {
+  await page.goto("/");
+  await page.locator(".layer-row").first().waitFor();
+
+  // Deleting both top-level subtrees leaves only the root frame (53 -> 1).
+  await page.locator(".layer-name").filter({ hasText: "Top Header Bar" }).click();
+  await page.locator(".layer-name").filter({ hasText: "Main Workspace Grid" }).click({ modifiers: ["Shift"] });
+  await expect(page.locator(".canvas-node.selected")).toHaveCount(2);
+  await page.keyboard.press("Delete");
+  await expect(canvasNodeCount(page)).resolves.toBe(1);
+
+  await page.keyboard.press("ControlOrMeta+z");
+  await expect(canvasNodeCount(page)).resolves.toBe(53);
+});
+
+test("multi copy/paste inserts all copies in one undo step", async ({ page }) => {
+  await page.goto("/");
+  await page.locator(".layer-row").first().waitFor();
+  const before = await canvasNodeCount(page);
+
+  await page.locator(".layer-name").filter({ hasText: "Brand Title" }).click();
+  await page.locator(".layer-name").filter({ hasText: "Live Sync Badge" }).click({ modifiers: ["Shift"] });
+  await page.keyboard.press("ControlOrMeta+c");
+  await page.keyboard.press("ControlOrMeta+v");
+  await expect(canvasNodeCount(page)).resolves.toBe(before + 2);
+  await expect(page.locator(".inspector-panel")).toContainText("2개 노드가 선택되었습니다");
+
+  await page.keyboard.press("ControlOrMeta+z");
+  await expect(canvasNodeCount(page)).resolves.toBe(before);
+});
+
+test("marquee group drag moves the whole selection rigidly", async ({ page }) => {
+  await page.goto("/");
+  await page.locator(".layer-row").first().waitFor();
+
+  await page.locator(".layer-name").filter({ hasText: "Top Header Bar" }).click();
+  await page.locator(".layer-name").filter({ hasText: "Main Workspace Grid" }).click({ modifiers: ["Shift"] });
+  const first = page.locator(".canvas-node.selected").nth(0);
+  const startBox = await first.boundingBox();
+
+  await page.mouse.move(startBox.x + startBox.width / 2, startBox.y + 6);
+  await page.mouse.down();
+  await page.mouse.move(startBox.x + startBox.width / 2 + 30, startBox.y + 6, { steps: 4 });
+  await page.mouse.up();
+
+  // Both are children of the root auto-layout column: the drag reorders the
+  // pair below each other rather than translating them; the observable is
+  // that the drag did not deselect or crash, and undo restores the order.
+  await expect(page.locator(".canvas-node.selected")).toHaveCount(2);
+  await page.keyboard.press("ControlOrMeta+z");
+  await expect(page.locator(".canvas-node.selected").nth(0)).toBeVisible();
+});

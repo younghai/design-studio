@@ -27,20 +27,25 @@ export interface NodePatch {
 
 export type Action =
   | { type: "select"; id: string | null }
+  | { type: "select-toggle"; id: string }
+  | { type: "select-many"; ids: string[] }
   | { type: "move"; id: string; dx: number; dy: number }
+  | { type: "move-set"; ids: string[]; dx: number; dy: number }
   | { type: "resize"; id: string; width: number; height: number }
   | { type: "set-props"; id: string; patch: NodePatch }
   | { type: "reorder"; id: string; parentId: string | null; index: number }
   | { type: "create"; node: StudioNode; parentId: string | null }
   | { type: "delete"; id: string }
+  | { type: "delete-set"; ids: string[] }
   | { type: "duplicate"; id: string }
+  | { type: "duplicate-set"; ids: string[] }
   | { type: "set-mode"; mode: Mode }
   | { type: "set-variable"; collection: string; path: string; mode: Mode; value: string }
   | { type: "set-tool"; tool: Tool }
   | { type: "set-devmode"; on: boolean }
   | { type: "set-viewport"; zoom?: number; panX?: number; panY?: number }
   | { type: "toast"; message: string | null }
-  | { type: "copy"; id: string }
+  | { type: "copy" }
   | { type: "paste" }
   | { type: "load-document"; doc: Document }
   | { type: "restore"; doc: Document }
@@ -49,14 +54,15 @@ export type Action =
 
 export interface AppState {
   doc: Document;
-  selectedId: string | null;
+  selectedIds: string[];
+  primaryId: string | null;
   tool: Tool;
   devMode: boolean;
   zoom: number;
   panX: number;
   panY: number;
   toast: string | null;
-  clipboard: StudioNode | null;
+  clipboard: StudioNode[];
   undoStack: Document[];
   redoStack: Document[];
 }
@@ -127,10 +133,48 @@ function withUndo(state: AppState, nextDoc: Document): Partial<AppState> {
   return { doc: nextDoc, undoStack, redoStack: [] };
 }
 
+// Free nodes translate; children of an auto-layout parent reorder by the
+// dragged position along the parent's main axis (relayout reassigns coords).
+function applyMove(doc: Document, id: string, dx: number, dy: number): Document {
+  const hit = findNode(doc.root, id);
+  if (!hit) return doc;
+  if (!hit.parent) {
+    return { ...doc, root: mapTree(doc.root, id, (n) => ({ ...n, x: n.x + dx, y: n.y + dy })) };
+  }
+  const parent = hit.parent;
+  if (parent.layout) {
+    const horizontal = parent.layout.dir === "row";
+    const pos = horizontal ? hit.node.x + dx : hit.node.y + dy;
+    const siblings = parent.children;
+    let index = siblings.findIndex((c) => c.id === id);
+    const posOf = (c: StudioNode) => (horizontal ? c.x : c.y);
+    while (index > 0 && posOf(siblings[index - 1]) > pos) index -= 1;
+    while (index < siblings.length - 1 && posOf(siblings[index + 1]) < pos) index += 1;
+    const reordered = siblings.filter((c) => c.id !== id);
+    reordered.splice(index, 0, hit.node);
+    return { ...doc, root: mapTree(doc.root, parent.id, (n) => ({ ...n, children: reordered })) };
+  }
+  return { ...doc, root: mapTree(doc.root, id, (n) => ({ ...n, x: n.x + dx, y: n.y + dy })) };
+}
+
+function removeMany(node: StudioNode, ids: Set<string>): StudioNode {
+  return { ...node, children: node.children.filter((c) => !ids.has(c.id)).map((c) => removeMany(c, ids)) };
+}
+
 export function reducer(state: AppState, action: Action): AppState {
   switch (action.type) {
     case "select":
-      return { ...state, selectedId: action.id };
+      return { ...state, selectedIds: action.id ? [action.id] : [], primaryId: action.id };
+    case "select-toggle": {
+      const has = state.selectedIds.includes(action.id);
+      const selectedIds = has
+        ? state.selectedIds.filter((i) => i !== action.id)
+        : [...state.selectedIds, action.id];
+      const primaryId = has ? selectedIds[selectedIds.length - 1] ?? null : action.id;
+      return { ...state, selectedIds, primaryId };
+    }
+    case "select-many":
+      return { ...state, selectedIds: action.ids, primaryId: action.ids[action.ids.length - 1] ?? null };
     case "set-tool":
       return { ...state, tool: action.tool };
     case "set-devmode":
@@ -144,25 +188,6 @@ export function reducer(state: AppState, action: Action): AppState {
       };
     case "toast":
       return { ...state, toast: action.message };
-    case "copy": {
-      const hit = findNode(state.doc.root, action.id);
-      // The root IS the document; pasting a document inside itself duplicates
-      // the whole tree (same guard the duplicate action uses).
-      if (!hit || !hit.parent) return state;
-      return { ...state, clipboard: deepClone(hit.node) };
-    }
-    case "paste": {
-      if (!state.clipboard) return state;
-      const copy = reId({ ...state.clipboard, x: state.clipboard.x + 20, y: state.clipboard.y + 20 });
-      const doc = {
-        ...state.doc,
-        root: mapTree(state.doc.root, state.doc.root.id, (p) => ({
-          ...p,
-          children: [...p.children, copy],
-        })),
-      };
-      return { ...state, ...withUndo(state, doc), selectedId: copy.id };
-    }
     case "set-mode":
       return { ...state, doc: { ...state.doc, mode: action.mode } };
     case "set-variable": {
@@ -185,36 +210,13 @@ export function reducer(state: AppState, action: Action): AppState {
       };
       return { ...state, ...withUndo(state, doc) };
     }
-    case "move": {
-      const hit = findNode(state.doc.root, action.id);
-      if (!hit || !hit.parent) {
-        const doc = {
-          ...state.doc,
-          root: mapTree(state.doc.root, action.id, (n) => ({ ...n, x: n.x + action.dx, y: n.y + action.dy })),
-        };
-        return { ...state, ...withUndo(state, doc) };
+    case "move":
+      return { ...state, ...withUndo(state, applyMove(state.doc, action.id, action.dx, action.dy)) };
+    case "move-set": {
+      let doc = state.doc;
+      for (const id of action.ids) {
+        doc = applyMove(doc, id, action.dx, action.dy);
       }
-      const parent = hit.parent;
-      if (parent.layout) {
-        const horizontal = parent.layout.dir === "row";
-        const pos = horizontal ? hit.node.x + action.dx : hit.node.y + action.dy;
-        const siblings = parent.children;
-        let index = siblings.findIndex((c) => c.id === action.id);
-        const posOf = (c: StudioNode) => (horizontal ? c.x : c.y);
-        while (index > 0 && posOf(siblings[index - 1]) > pos) index -= 1;
-        while (index < siblings.length - 1 && posOf(siblings[index + 1]) < pos) index += 1;
-        const reordered = siblings.filter((c) => c.id !== action.id);
-        reordered.splice(index, 0, hit.node);
-        const doc = {
-          ...state.doc,
-          root: mapTree(state.doc.root, parent.id, (n) => ({ ...n, children: reordered })),
-        };
-        return { ...state, ...withUndo(state, doc) };
-      }
-      const doc = {
-        ...state.doc,
-        root: mapTree(state.doc.root, action.id, (n) => ({ ...n, x: n.x + action.dx, y: n.y + action.dy })),
-      };
       return { ...state, ...withUndo(state, doc) };
     }
     case "resize": {
@@ -268,15 +270,30 @@ export function reducer(state: AppState, action: Action): AppState {
                 children: [...p.children, action.node],
               })),
             };
-      return { ...state, ...withUndo(state, doc), selectedId: action.node.id };
+      return { ...state, ...withUndo(state, doc), selectedIds: [action.node.id], primaryId: action.node.id };
     }
     case "delete": {
       if (state.doc.root.id === action.id) return state;
-      const doc = {
-        ...state.doc,
-        root: removeNode(state.doc.root, action.id),
+      const doc = { ...state.doc, root: removeMany(state.doc.root, new Set([action.id])) };
+      const selectedIds = state.selectedIds.filter((i) => i !== action.id);
+      return {
+        ...state,
+        ...withUndo(state, doc),
+        selectedIds,
+        primaryId: state.primaryId === action.id ? selectedIds[selectedIds.length - 1] ?? null : state.primaryId,
       };
-      return { ...state, ...withUndo(state, doc), selectedId: null };
+    }
+    case "delete-set": {
+      const ids = new Set(action.ids);
+      if (ids.has(state.doc.root.id) || ids.size === 0) return state;
+      const doc = { ...state.doc, root: removeMany(state.doc.root, ids) };
+      const selectedIds = state.selectedIds.filter((i) => !ids.has(i));
+      return {
+        ...state,
+        ...withUndo(state, doc),
+        selectedIds,
+        primaryId: ids.has(state.primaryId ?? "") ? selectedIds[selectedIds.length - 1] ?? null : state.primaryId,
+      };
     }
     case "duplicate": {
       const hit = findNode(state.doc.root, action.id);
@@ -289,12 +306,45 @@ export function reducer(state: AppState, action: Action): AppState {
           children: [...p.children, copy],
         })),
       };
-      return { ...state, ...withUndo(state, doc), selectedId: copy.id };
+      return { ...state, ...withUndo(state, doc), selectedIds: [copy.id], primaryId: copy.id };
+    }
+    case "duplicate-set": {
+      let root = state.doc.root;
+      const newIds: string[] = [];
+      for (const id of action.ids) {
+        const hit = findNode(root, id);
+        if (!hit || !hit.parent) continue;
+        const copy = reId(hit.node);
+        newIds.push(copy.id);
+        root = mapTree(root, hit.parent.id, (p) => ({ ...p, children: [...p.children, copy] }));
+      }
+      if (newIds.length === 0) return state;
+      return { ...state, ...withUndo(state, { ...state.doc, root }), selectedIds: newIds, primaryId: newIds[newIds.length - 1] };
+    }
+    case "copy": {
+      const clipboard = state.selectedIds
+        .map((id) => findNode(state.doc.root, id))
+        .filter((hit): hit is { node: StudioNode; parent: StudioNode; index: number } => !!hit && !!hit.parent)
+        .map((hit) => deepClone(hit.node));
+      return { ...state, clipboard };
+    }
+    case "paste": {
+      if (state.clipboard.length === 0) return state;
+      const copies = state.clipboard.map((n) => reId({ ...n, x: n.x + 20, y: n.y + 20 }));
+      const doc = {
+        ...state.doc,
+        root: mapTree(state.doc.root, state.doc.root.id, (p) => ({
+          ...p,
+          children: [...p.children, ...copies],
+        })),
+      };
+      const ids = copies.map((c) => c.id);
+      return { ...state, ...withUndo(state, doc), selectedIds: ids, primaryId: ids[ids.length - 1] };
     }
     case "load-document":
-      return { ...state, ...withUndo(state, action.doc), selectedId: null };
+      return { ...state, ...withUndo(state, action.doc), selectedIds: [], primaryId: null };
     case "restore":
-      return { ...state, doc: action.doc, selectedId: null };
+      return { ...state, doc: action.doc, selectedIds: [], primaryId: null };
     case "undo": {
       if (state.undoStack.length === 0) return state;
       const prev = state.undoStack[state.undoStack.length - 1];
@@ -320,21 +370,18 @@ export function reducer(state: AppState, action: Action): AppState {
   }
 }
 
-function removeNode(node: StudioNode, id: string): StudioNode {
-  return { ...node, children: node.children.filter((c) => c.id !== id).map((c) => removeNode(c, id)) };
-}
-
 export function makeInitialState(): AppState {
   return {
     doc: makeInitialDocument(),
-    selectedId: null,
+    selectedIds: [],
+    primaryId: null,
     tool: "select",
     devMode: false,
     zoom: 0.55,
     panX: 40,
     panY: 40,
     toast: null,
-    clipboard: null,
+    clipboard: [],
     undoStack: [],
     redoStack: [],
   };

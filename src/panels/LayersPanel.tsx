@@ -13,13 +13,19 @@ interface RowProps {
 function LayerRow({ node, depth, dropTargetId, setDropTargetId }: RowProps): React.ReactElement {
   const { state, dispatch } = useStore();
   const [editing, setEditing] = useState(false);
-  const selected = state.selectedId === node.id;
+  const selected = state.selectedIds.includes(node.id);
 
   return (
     <div
       className={`layer-row${selected ? " selected" : ""}${dropTargetId === node.id ? " drop-target" : ""}`}
       style={{ paddingLeft: 8 + depth * 14 }}
-      onClick={() => dispatch({ type: "select", id: node.id })}
+      onClick={(e) => {
+        if (e.metaKey || e.ctrlKey || e.shiftKey) {
+          dispatch({ type: "select-toggle", id: node.id });
+        } else {
+          dispatch({ type: "select", id: node.id });
+        }
+      }}
       onDoubleClick={() => setEditing(true)}
       draggable
       onDragOver={(e) => {

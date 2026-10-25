@@ -12,6 +12,7 @@ const TOOL_KEYS: Record<string, Tool> = {
 
 export function useShortcuts(): void {
   const { state, dispatch } = useStore();
+  const hasSelection = state.selectedIds.length > 0;
 
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent): void {
@@ -26,20 +27,25 @@ export function useShortcuts(): void {
         dispatch({ type: e.shiftKey ? "redo" : "undo" });
         return;
       }
-      if (meta && e.key.toLowerCase() === "d") {
+      if (meta && e.key.toLowerCase() === "a") {
         e.preventDefault();
-        if (state.selectedId) dispatch({ type: "duplicate", id: state.selectedId });
+        dispatch({ type: "select-many", ids: state.doc.root.children.map((c) => c.id) });
         return;
       }
-      if (meta && e.key.toLowerCase() === "c" && state.selectedId) {
+      if (meta && e.key.toLowerCase() === "d" && hasSelection) {
         e.preventDefault();
-        dispatch({ type: "copy", id: state.selectedId });
+        dispatch({ type: "duplicate-set", ids: state.selectedIds });
         return;
       }
-      if (meta && e.key.toLowerCase() === "x" && state.selectedId) {
+      if (meta && e.key.toLowerCase() === "c" && hasSelection) {
         e.preventDefault();
-        dispatch({ type: "copy", id: state.selectedId });
-        dispatch({ type: "delete", id: state.selectedId });
+        dispatch({ type: "copy" });
+        return;
+      }
+      if (meta && e.key.toLowerCase() === "x" && hasSelection) {
+        e.preventDefault();
+        dispatch({ type: "copy" });
+        dispatch({ type: "delete-set", ids: state.selectedIds });
         return;
       }
       if (meta && e.key.toLowerCase() === "v") {
@@ -47,9 +53,9 @@ export function useShortcuts(): void {
         dispatch({ type: "paste" });
         return;
       }
-      if ((e.key === "Delete" || e.key === "Backspace") && state.selectedId) {
+      if ((e.key === "Delete" || e.key === "Backspace") && hasSelection) {
         e.preventDefault();
-        dispatch({ type: "delete", id: state.selectedId });
+        dispatch({ type: "delete-set", ids: state.selectedIds });
         return;
       }
       if (e.shiftKey && e.key.toLowerCase() === "d") {
@@ -65,5 +71,5 @@ export function useShortcuts(): void {
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [dispatch, state.selectedId, state.devMode]);
+  }, [dispatch, hasSelection, state.selectedIds, state.devMode, state.doc.root]);
 }

@@ -20,7 +20,7 @@ export default function CodegenPanel(): React.ReactElement {
   const [copied, setCopied] = useState(false);
 
   const placed = useMemo(() => relayoutTree(state.doc.root), [state.doc.root]);
-  const hit = state.selectedId ? findNode(placed, state.selectedId) : null;
+  const hit = state.primaryId ? findNode(placed, state.primaryId) : null;
   const selected = hit?.node ?? placed;
 
   const code = useMemo(() => {

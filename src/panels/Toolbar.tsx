@@ -32,7 +32,7 @@ export default function Toolbar({ variablesOpen, onToggleVariables }: ToolbarPro
 
   function exportImage(kind: "svg" | "png"): void {
     const placed = relayoutTree(state.doc.root);
-    const hit = state.selectedId ? findNode(placed, state.selectedId) : null;
+    const hit = state.primaryId ? findNode(placed, state.primaryId) : null;
     const target = hit?.node ?? placed;
     const base = target.name.replace(/\s+/g, "-").toLowerCase() || "node";
     const svg = nodeToSvg(target, state.doc);

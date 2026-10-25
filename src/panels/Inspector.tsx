@@ -29,7 +29,26 @@ function NumField({
 
 export default function Inspector(): React.ReactElement {
   const { state, dispatch } = useStore();
-  const hit = state.selectedId ? findNode(state.doc.root, state.selectedId) : null;
+
+  if (state.selectedIds.length > 1) {
+    return (
+      <div className="inspector-panel">
+        <div className="panel-header">인스펙터</div>
+        <div className="inspector-section">
+          <p style={{ margin: 0 }}>{state.selectedIds.length}개 노드가 선택되었습니다</p>
+          <p style={{ color: "var(--ds-text-dim)", margin: "4px 0 0" }}>
+            Shift/⌘ 클릭 또는 마키로 선택했습니다. 속성 편집은 단일 선택에서만 가능합니다.
+          </p>
+          <div style={{ display: "flex", gap: 6, marginTop: 10 }}>
+            <button onClick={() => dispatch({ type: "duplicate-set", ids: state.selectedIds })}>복제 (⌘D)</button>
+            <button onClick={() => dispatch({ type: "delete-set", ids: state.selectedIds })}>삭제 (Del)</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const hit = state.primaryId ? findNode(state.doc.root, state.primaryId) : null;
   if (!hit) {
     return (
       <div className="inspector-panel">

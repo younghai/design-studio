@@ -18,7 +18,7 @@ interface LiveOverride {
 }
 
 interface DragState {
-  kind: "move" | "resize" | "pan";
+  kind: "move" | "resize" | "pan" | "marquee";
   id?: string;
   handle?: Handle;
   startDocX: number;
@@ -122,10 +122,37 @@ const NEW_NODE_DEFAULTS: Record<Exclude<Tool, "select">, () => StudioNode> = {
   }),
 };
 
-function nodeStyle(node: StudioNode, doc: Document, live: LiveOverride | null): React.CSSProperties {
-  const fill = resolveColor(node.style.fill, doc);
+// Marquee selection: intersecting nodes, topmost per branch (a hit node
+// absorbs the marquee for its whole subtree, like Figma's top-frame pick).
+function marqueeHit(m: { x0: number; y0: number; x1: number; y1: number }, root: StudioNode): string[] {
+  const left = Math.min(m.x0, m.x1);
+  const right = Math.max(m.x0, m.x1);
+  const top = Math.min(m.y0, m.y1);
+  const bottom = Math.max(m.y0, m.y1);
+  const hits: string[] = [];
+  function walk(node: StudioNode, absX: number, absY: number): void {
+    for (const child of node.children) {
+      const cx = absX + child.x;
+      const cy = absY + child.y;
+      const intersects =
+        child.visible &&
+        cx < right &&
+        cy < bottom &&
+        cx + child.width > left &&
+        cy + child.height > top;
+      if (intersects) {
+        hits.push(child.id);
+      } else {
+        walk(child, cx, cy);
+      }
+    }
+  }
+  walk(root, 0, 0);
+  return hits;
+}
+
+function nodeStyle(node: StudioNode, doc: Document, override: LiveOverride | null): React.CSSProperties {  const fill = resolveColor(node.style.fill, doc);
   const stroke = resolveColor(node.style.stroke, doc);
-  const override = live?.id === node.id ? live : null;
   const isEllipse = node.kind === "ellipse";
   return {
     left: node.x + (override?.dx ?? 0),
@@ -144,7 +171,8 @@ interface NodeViewProps {
   node: StudioNode;
   doc: Document;
   live: LiveOverride | null;
-  selectedId: string | null;
+  selectedIds: string[];
+  showHandles: boolean;
   editId: string | null;
   interactive: boolean;
   onNodePointerDown: (e: React.PointerEvent, node: StudioNode) => void;
@@ -155,10 +183,15 @@ interface NodeViewProps {
 }
 
 function NodeView(props: NodeViewProps): React.ReactElement {
-  const { node, doc, live, selectedId, editId, interactive, onNodePointerDown, onHandlePointerDown, onEditStart, onEditCommit, onEditCancel } = props;
-  const selected = selectedId === node.id;
+  const { node, doc, live, selectedIds, showHandles, editId, interactive, onNodePointerDown, onHandlePointerDown, onEditStart, onEditCommit, onEditCancel } = props;
+  const selected = selectedIds.includes(node.id);
   const editing = editId === node.id;
-  const style = nodeStyle(node, doc, live);
+  // Rigid group move: while dragging one member of the selection, every other
+  // member carries the same live offset.
+  const groupLive =
+    live && live.id !== node.id && selectedIds.includes(node.id) && selectedIds.includes(live.id) ? live : null;
+  const effectiveLive = live?.id === node.id ? live : groupLive;
+  const style = nodeStyle(node, doc, effectiveLive);
   const isText = node.kind === "text";
   const textColor = resolveColor(node.text?.color, doc);
 
@@ -229,7 +262,7 @@ function NodeView(props: NodeViewProps): React.ReactElement {
       {node.children.map((c) => (
         <NodeView key={c.id} {...props} node={c} />
       ))}
-      {selected && interactive && !editing && (
+      {selected && interactive && !editing && showHandles && (
         <>
           {(Object.keys(HANDLE_POS) as Handle[]).map((h) => (
             <div
@@ -253,6 +286,7 @@ export default function CanvasView(): React.ReactElement {
   const [live, setLive] = useState<LiveOverride | null>(null);
   const [spaceDown, setSpaceDown] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
+  const [marquee, setMarquee] = useState<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
 
   const placed = useMemo(() => relayoutTree(state.doc.root), [state.doc.root]);
   const interactive = state.tool === "select";
@@ -363,7 +397,24 @@ export default function CanvasView(): React.ReactElement {
 
   function onNodePointerDown(e: React.PointerEvent, node: StudioNode): void {
     if (!interactive || spaceRef.current) return;
-    dispatch({ type: "select", id: node.id });
+    if (node.id === placed.id) {
+      // The root frame covers the whole document; dragging from its
+      // background starts a marquee over children (Figma canvas behavior),
+      // a plain click deselects. The root stays selectable via the layers
+      // panel.
+      startMarquee(e);
+      return;
+    }
+    if (e.shiftKey || e.metaKey || e.ctrlKey) {
+      dispatch({ type: "select-toggle", id: node.id });
+      // Modifier-click only changes membership; dragging after it moves the
+      // resulting set, so still start a drag from this node.
+      beginDrag(e, node);
+      return;
+    }
+    if (!state.selectedIds.includes(node.id)) {
+      dispatch({ type: "select", id: node.id });
+    }
     beginDrag(e, node);
   }
 
@@ -391,7 +442,34 @@ export default function CanvasView(): React.ReactElement {
       dispatch({ type: "set-tool", tool: "select" });
       return;
     }
-    dispatch({ type: "select", id: null });
+    // Select tool on empty canvas: start a marquee. A click (no drag)
+    // deselects on pointerup.
+    startMarquee(e);
+  }
+
+  function startMarquee(e: React.PointerEvent): void {
+    // Capture on the viewport so a marquee that ends over a side panel or
+    // outside the canvas still commits (uncaptured, the pointerup targets
+    // the panel and never reaches the viewport handler).
+    try {
+      viewportRef.current?.setPointerCapture(e.pointerId);
+    } catch {
+      // synthetic/embedded pointers may reject capture; in-canvas releases
+      // still work without it
+    }
+    const p = toDoc(e);
+    dragRef.current = {
+      kind: "marquee",
+      startDocX: p.x,
+      startDocY: p.y,
+      nodeX: p.x,
+      nodeY: p.y,
+      nodeW: 0,
+      nodeH: 0,
+      panX0: state.panX,
+      panY0: state.panY,
+    };
+    setMarquee({ x0: p.x, y0: p.y, x1: p.x, y1: p.y });
   }
 
   function onPointerMove(e: React.PointerEvent): void {
@@ -400,6 +478,10 @@ export default function CanvasView(): React.ReactElement {
     const p = toDoc(e);
     const dx = p.x - drag.startDocX;
     const dy = p.y - drag.startDocY;
+    if (drag.kind === "marquee") {
+      setMarquee((m) => (m ? { ...m, x1: p.x, y1: p.y } : m));
+      return;
+    }
     if (drag.kind === "pan") {
       dispatch({
         type: "set-viewport",
@@ -443,13 +525,33 @@ export default function CanvasView(): React.ReactElement {
     const drag = dragRef.current;
     dragRef.current = null;
     setLive(null);
+
+    if (drag?.kind === "marquee") {
+      const m = marquee;
+      setMarquee(null);
+      if (m) {
+        const w = Math.abs(m.x1 - m.x0);
+        const h = Math.abs(m.y1 - m.y0);
+        if (w < 3 || h < 3) {
+          dispatch({ type: "select", id: null });
+        } else {
+          dispatch({ type: "select-many", ids: marqueeHit(m, placed) });
+        }
+      }
+      return;
+    }
+
     if (!drag || !drag.id || !drag.latest) {
       return;
     }
     const latest = drag.latest;
     if (drag.kind === "move") {
       if (latest.dx !== 0 || latest.dy !== 0) {
-        dispatch({ type: "move", id: drag.id, dx: latest.dx, dy: latest.dy });
+        if (state.selectedIds.includes(drag.id) && state.selectedIds.length > 1) {
+          dispatch({ type: "move-set", ids: state.selectedIds, dx: latest.dx, dy: latest.dy });
+        } else {
+          dispatch({ type: "move", id: drag.id, dx: latest.dx, dy: latest.dy });
+        }
       }
     } else if (drag.kind === "resize") {
       dispatch({
@@ -483,7 +585,8 @@ export default function CanvasView(): React.ReactElement {
           node={placed}
           doc={state.doc}
           live={live}
-          selectedId={state.selectedId === placed.id ? null : state.selectedId}
+          selectedIds={state.selectedIds.includes(placed.id) ? state.selectedIds.filter((i) => i !== placed.id) : state.selectedIds}
+          showHandles={state.selectedIds.length === 1}
           editId={editId}
           interactive={interactive}
           onNodePointerDown={onNodePointerDown}
@@ -495,6 +598,20 @@ export default function CanvasView(): React.ReactElement {
           }}
           onEditCancel={() => setEditId(null)}
         />
+        {marquee && (
+          <div
+            style={{
+              position: "absolute",
+              left: Math.min(marquee.x0, marquee.x1),
+              top: Math.min(marquee.y0, marquee.y1),
+              width: Math.abs(marquee.x1 - marquee.x0),
+              height: Math.abs(marquee.y1 - marquee.y0),
+              border: "1px solid var(--ds-selection)",
+              background: "rgba(13, 153, 255, 0.08)",
+              pointerEvents: "none",
+            }}
+          />
+        )}
       </div>
       <div className="canvas-statusbar">
         {Math.round(state.zoom * 100)}% · {state.doc.mode.toUpperCase()} · {state.doc.name}

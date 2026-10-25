@@ -25,7 +25,7 @@ Cloudflare Pages / Vercel / Netlify도 가능합니다. 빌드 커맨드 `pnpm b
 - **문서 모델**: 프레임/텍스트/사각형/타원 노드 트리. 원본의 선언적 `NodeSpec` JSON과 필드 호환.
 - **Auto-Layout**: row/column 재귀 배치, gap/padding/align/justify, 노드별 Hug/Fill/Fixed 크기.
 - **라이브 변수**: `$collection.path` 별칭으로 색을 토큰에 바인딩. Light/Dark 모드 전환 시 캔버스가 즉시 재렌더됩니다. 변수 패널에서 모드별 값을 편집할 수 있습니다.
-- **캔버스 편집**: 클릭 선택, 드래그 이동(auto-layout 부모 안에서는 순서 변경), 8핸들 리사이즈, 스페이스 팬, ⌘+휠 줌, 더블클릭 텍스트 인라인 편집, ⌘C/⌘X/⌘V 클립보드.
+- **캔버스 편집**: 클릭 선택, Shift/⌘ 클릭 다중 선택, 빈 캔버스 드래그 마키 선택(가지별 최상위), 강체 다중 이동, 8핸들 리사이즈, 스페이스 팬, ⌘+휠 줌, 더블클릭 텍스트 인라인 편집, ⌘C/⌘X/⌘V 클립보드.
 - **Dev Mode**(`Shift+D`): 선택 노드 서브트리를 React / CSS / Tailwind / SwiftUI / Jetpack Compose 코드로 생성하고 클립보드로 복사. 웹 타깃은 변수를 CSS 변수(`var(--token)`)로, 네이티브 타깃은 리졸브된 색 리터럴로 내보냅니다.
 - **이미지 내보내기**: 선택 서브트리(미선택 시 전체)를 SVG 또는 2x PNG로 내려받습니다.
 - **문서 IO**: NodeSpec JSON 스펙 적용(검증 후 원자적 적용, ⌘Z로 되돌리기), 문서 JSON 내보내기/가져오기, 500ms 디바운스 자동 저장(localStorage, `schemaVersion: 1`).
@@ -36,6 +36,9 @@ Cloudflare Pages / Vercel / Netlify도 가능합니다. 빌드 커맨드 `pnpm b
 | 키 | 동작 |
 | --- | --- |
 | `V` `F` `T` `R` `O` | 선택 / 프레임 / 텍스트 / 사각형 / 타원 도구 |
+| `Shift`/`⌘` + 클릭 | 다중 선택 토글 (캔버스·레이어 패널 공통) |
+| 캔버스 드래그 | 마키 선택 (빈 곳에서) |
+| `⌘A` | 최상위 노드 전체 선택 |
 | `Shift+D` | Dev Mode 토글 |
 | `⌘Z` / `⌘⇧Z` | 실행 취소 / 다시 실행 (스택 상한 50) |
 | `⌘D` | 선택 노드 복제 |
