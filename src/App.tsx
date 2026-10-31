@@ -5,7 +5,9 @@ import Toolbar from "./panels/Toolbar";
 import LayersPanel from "./panels/LayersPanel";
 import Inspector from "./panels/Inspector";
 import VariablesPanel from "./panels/VariablesPanel";
+import CommandPalette from "./panels/CommandPalette";
 import CanvasView from "./canvas/CanvasView";
+import { installTextMeasurer } from "./canvas/measureBridge";
 import CodegenPanel from "./devmode/CodegenPanel";
 import { useShortcuts } from "./app/shortcuts";
 import ErrorBoundary from "./app/ErrorBoundary";
@@ -13,8 +15,31 @@ import ErrorBoundary from "./app/ErrorBoundary";
 function AppInner(): React.ReactElement {
   const { state, dispatch } = useStore();
   const [variablesOpen, setVariablesOpen] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [measureTick, setMeasureTick] = useState(0);
   const restoredRef = useRef(false);
   useShortcuts();
+
+  useEffect(() => {
+    let cancelled = false;
+    installTextMeasurer().then(() => {
+      if (!cancelled) setMeasureTick((t) => t + 1);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent): void => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setPaletteOpen((v) => !v);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
 
   useEffect(() => {
     if (restoredRef.current) return;
@@ -43,10 +68,11 @@ function AppInner(): React.ReactElement {
       <Toolbar variablesOpen={variablesOpen} onToggleVariables={() => setVariablesOpen((v) => !v)} />
       <div style={{ display: "flex", flex: 1, minHeight: 0 }}>
         <LayersPanel />
-        <CanvasView />
+        <CanvasView measureTick={measureTick} />
         {state.devMode ? <CodegenPanel /> : <Inspector />}
       </div>
       {variablesOpen && <VariablesPanel onClose={() => setVariablesOpen(false)} />}
+      {paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} />}
       {state.toast && <div className="toast">{state.toast}</div>}
     </div>
   );

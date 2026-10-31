@@ -1,4 +1,5 @@
 import type { Document, StudioNode } from "../model/types";
+import { solid } from "../model/types";
 
 export const STORAGE_KEY = "design-studio-doc-v1";
 
@@ -66,22 +67,70 @@ export function validateSpec(input: unknown): SpecValidation {
   return errors.length > 0 ? { ok: false, errors } : { ok: true, spec: input };
 }
 
+/** v1 node (style.fill string) → v2 node (fills[], effects[], devStatus). */
+function migrateNode(node: StudioNode): StudioNode {
+  const legacyFill = (node.style as { fill?: string }).fill;
+  return {
+    ...node,
+    devStatus: node.devStatus ?? "design",
+    style: {
+      ...node.style,
+      fills: node.style.fills ?? (legacyFill !== undefined ? [solid(legacyFill)] : []),
+      effects: node.style.effects ?? [],
+    },
+    children: node.children.map(migrateNode),
+  };
+}
+
+export function migrateV1Document(input: {
+  name?: unknown;
+  mode?: unknown;
+  collections?: unknown;
+  root?: unknown;
+}): Document {
+  const root = migrateNode((input.root as StudioNode) ?? { id: "root", name: "Screen", kind: "frame", x: 0, y: 0, width: 0, height: 0, sizingW: "fixed", sizingH: "fixed", visible: true, style: { fills: [], effects: [] }, children: [] });
+  root.x = 0;
+  root.y = 0;
+  return {
+    schemaVersion: 2,
+    name: typeof input.name === "string" ? input.name : "Untitled",
+    mode: input.mode === "light" ? "light" : "dark",
+    collections: Array.isArray(input.collections) ? (input.collections as Document["collections"]) : [],
+    pages: [root],
+  };
+}
+
 export function validateDocument(input: unknown): { ok: true; doc: Document } | { ok: false; errors: string[] } {
   if (!isRecord(input)) return { ok: false, errors: ["루트가 JSON 객체가 아닙니다"] };
-  if (input.schemaVersion !== 1) {
+
+  if (input.schemaVersion === 1) {
+    // Validate the v1 root BEFORE migrating; a corrupted v1 doc must be
+    // discarded, not half-migrated.
+    if (!isRecord(input.root)) return { ok: false, errors: ["v1 문서에 root가 없습니다"] };
+    const nodeErrors: string[] = [];
+    validateNode(input.root, 0, nodeErrors);
+    if (nodeErrors.length > 0) {
+      return { ok: false, errors: [`root가 손상되었습니다: ${nodeErrors.slice(0, 3).join(", ")}`] };
+    }
+    return { ok: true, doc: migrateV1Document(input as Parameters<typeof migrateV1Document>[0]) };
+  }
+
+  if (input.schemaVersion !== 2) {
     return { ok: false, errors: [`schemaVersion이 지원되지 않습니다: ${String(input.schemaVersion)}`] };
   }
-  if (!isRecord(input.root)) return { ok: false, errors: ["root가 없습니다"] };
+  if (!Array.isArray(input.pages) || input.pages.length === 0) {
+    return { ok: false, errors: ["pages는 1개 이상의 배열이어야 합니다"] };
+  }
   if (!Array.isArray(input.collections)) return { ok: false, errors: ["collections가 배열이 아닙니다"] };
   if (input.mode !== "light" && input.mode !== "dark") {
     return { ok: false, errors: ["mode는 light 또는 dark이어야 합니다"] };
   }
-  // localStorage restore feeds straight into the render tree; an unvalidated
-  // root would crash every reload until the user clears storage manually.
-  const nodeErrors: string[] = [];
-  validateNode(input.root, 0, nodeErrors);
-  if (nodeErrors.length > 0) {
-    return { ok: false, errors: [`root가 손상되었습니다: ${nodeErrors.slice(0, 3).join(", ")}`] };
+  for (const page of input.pages) {
+    const nodeErrors: string[] = [];
+    validateNode(page, 0, nodeErrors);
+    if (nodeErrors.length > 0) {
+      return { ok: false, errors: [`page가 손상되었습니다: ${nodeErrors.slice(0, 3).join(", ")}`] };
+    }
   }
   return { ok: true, doc: input as unknown as Document };
 }
@@ -139,15 +188,17 @@ export function loadLocal(): Document | null {
 
 export function specFromDocument(doc: Document): Record<string, unknown> {
   function nodeToSpec(n: StudioNode): Record<string, unknown> {
+    const firstSolid = n.style.fills.find((p) => p.type === "solid");
     const out: Record<string, unknown> = {
       name: n.name,
       kind: n.kind,
       width: n.width,
       height: n.height,
-      ...(n.style.fill !== undefined ? { fill: n.style.fill } : {}),
+      ...(firstSolid ? { fill: firstSolid.color } : {}),
       ...(n.style.stroke !== undefined ? { stroke: n.style.stroke } : {}),
       ...(n.style.strokeWidth !== undefined ? { stroke_width: n.style.strokeWidth } : {}),
       ...(n.style.radius !== undefined ? { radius: n.style.radius } : {}),
+      ...(n.devStatus !== "design" ? { dev_status: n.devStatus } : {}),
       ...(n.text
         ? { text: n.text.text, font_size: n.text.fontSize, font_weight: n.text.fontWeight, ...(n.text.color ? { color: n.text.color } : {}) }
         : {}),
@@ -158,5 +209,5 @@ export function specFromDocument(doc: Document): Record<string, unknown> {
     };
     return out;
   }
-  return nodeToSpec(doc.root);
+  return nodeToSpec(doc.pages[0]);
 }

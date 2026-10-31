@@ -1,10 +1,11 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import type { Document, StudioNode } from "../model/types";
+import type { Document, Paint, StudioNode } from "../model/types";
 import { textHeight, textWidth } from "../model/types";
 import { relayoutTree } from "../model/relayout";
 import { resolveColor } from "../model/variables";
-import { useStore } from "../state/store";
+import { activePageIndex, useStore } from "../state/store";
 import type { Tool } from "../state/store";
+import ContextMenu from "../panels/ContextMenu";
 import "./canvas.css";
 
 type Handle = "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w";
@@ -74,7 +75,15 @@ const NEW_NODE_DEFAULTS: Record<Exclude<Tool, "select">, () => StudioNode> = {
     sizingW: "fixed",
     sizingH: "fixed",
     visible: true,
-    style: { fill: "$core.bg.surface", stroke: "$core.border.default", strokeWidth: 1, radius: 8, opacity: 1 },
+    devStatus: "design",
+    style: {
+      fills: [{ type: "solid", color: "$core.bg.surface" }],
+      stroke: "$core.border.default",
+      strokeWidth: 1,
+      radius: 8,
+      opacity: 1,
+      effects: [],
+    },
     children: [],
   }),
   text: () => ({
@@ -88,8 +97,9 @@ const NEW_NODE_DEFAULTS: Record<Exclude<Tool, "select">, () => StudioNode> = {
     sizingW: "hug",
     sizingH: "hug",
     visible: true,
+    devStatus: "design",
     text: { text: "Text", fontSize: 14, fontWeight: 400, color: "$core.text.primary", lineHeight: 1.3 },
-    style: { opacity: 1 },
+    style: { fills: [], opacity: 1, effects: [] },
     children: [],
   }),
   rect: () => ({
@@ -103,7 +113,8 @@ const NEW_NODE_DEFAULTS: Record<Exclude<Tool, "select">, () => StudioNode> = {
     sizingW: "fixed",
     sizingH: "fixed",
     visible: true,
-    style: { fill: "$core.brand", opacity: 1 },
+    devStatus: "design",
+    style: { fills: [{ type: "solid", color: "$core.brand" }], opacity: 1, effects: [] },
     children: [],
   }),
   ellipse: () => ({
@@ -117,14 +128,69 @@ const NEW_NODE_DEFAULTS: Record<Exclude<Tool, "select">, () => StudioNode> = {
     sizingW: "fixed",
     sizingH: "fixed",
     visible: true,
-    style: { fill: "$core.accent.violet", radius: 999, opacity: 1 },
+    devStatus: "design",
+    style: { fills: [{ type: "solid", color: "$core.accent.violet" }], radius: 999, opacity: 1, effects: [] },
     children: [],
   }),
 };
 
+function paintToCss(paint: Paint, doc: Document): string | null {
+  if (paint.type === "solid") return resolveColor(paint.color, doc) ?? null;
+  if (paint.type === "linear") {
+    const stops = paint.stops
+      .map((s) => `${resolveColor(s.color, doc) ?? s.color} ${Math.round(s.pos * 100)}%`)
+      .join(", ");
+    return `linear-gradient(${paint.angle}deg, ${stops})`;
+  }
+  return null;
+}
+
+function fillsToBackground(node: StudioNode, doc: Document): React.CSSProperties {
+  const fills = node.style.fills;
+  const image = fills.find((f) => f.type === "image") as Extract<Paint, { type: "image" }> | undefined;
+  if (image) {
+    return { backgroundImage: `url("${image.src}")`, backgroundSize: "cover", backgroundPosition: "center" };
+  }
+  for (const f of fills) {
+    const css = paintToCss(f, doc);
+    if (css) return { background: css };
+  }
+  return {};
+}
+
+function effectsToBoxShadow(node: StudioNode, doc: Document): string | undefined {
+  if (node.style.effects.length === 0) return undefined;
+  return node.style.effects
+    .map((e) => `${e.x}px ${e.y}px ${e.blur}px ${resolveColor(e.color, doc) ?? e.color}`)
+    .join(", ");
+}
+
+function nodeStyle(node: StudioNode, doc: Document, override: LiveOverride | null): React.CSSProperties {
+  const stroke = resolveColor(node.style.stroke, doc);
+  const isEllipse = node.kind === "ellipse";
+  return {
+    left: node.x,
+    top: node.y,
+    width: override?.w ?? node.width,
+    height: override?.h ?? node.height,
+    // Live drags ride the compositor (transform) instead of left/top, so the
+    // browser never relayouts during pointermove; x/y commit on pointerup.
+    ...(override && (override.dx !== 0 || override.dy !== 0)
+      ? { transform: `translate(${override.dx}px, ${override.dy}px)` }
+      : {}),
+    ...fillsToBackground(node, doc),
+    boxShadow: effectsToBoxShadow(node, doc),
+    border: stroke && node.style.strokeWidth ? `${node.style.strokeWidth}px solid ${stroke}` : undefined,
+    borderRadius: isEllipse ? "50%" : node.style.radius,
+    opacity: node.style.opacity ?? 1,
+    display: node.visible ? undefined : "none",
+  };
+}
+
 // Marquee selection: intersecting nodes, topmost per branch (a hit node
 // absorbs the marquee for its whole subtree, like Figma's top-frame pick).
-function marqueeHit(m: { x0: number; y0: number; x1: number; y1: number }, root: StudioNode): string[] {
+// Pages act as children of a virtual root.
+function marqueeHit(m: { x0: number; y0: number; x1: number; y1: number }, pages: StudioNode[]): string[] {
   const left = Math.min(m.x0, m.x1);
   const right = Math.max(m.x0, m.x1);
   const top = Math.min(m.y0, m.y1);
@@ -147,29 +213,29 @@ function marqueeHit(m: { x0: number; y0: number; x1: number; y1: number }, root:
       }
     }
   }
-  walk(root, 0, 0);
+  walk({ id: "__virtual__", name: "", kind: "frame", x: 0, y: 0, width: 0, height: 0, sizingW: "fixed", sizingH: "fixed", visible: true, devStatus: "design", style: { fills: [], effects: [] }, children: pages } as StudioNode, 0, 0);
   return hits;
 }
 
-function nodeStyle(node: StudioNode, doc: Document, override: LiveOverride | null): React.CSSProperties {  const fill = resolveColor(node.style.fill, doc);
-  const stroke = resolveColor(node.style.stroke, doc);
-  const isEllipse = node.kind === "ellipse";
-  return {
-    left: node.x + (override?.dx ?? 0),
-    top: node.y + (override?.dy ?? 0),
-    width: override?.w ?? node.width,
-    height: override?.h ?? node.height,
-    background: fill,
-    border: stroke && node.style.strokeWidth ? `${node.style.strokeWidth}px solid ${stroke}` : undefined,
-    borderRadius: isEllipse ? "50%" : node.style.radius,
-    opacity: node.style.opacity ?? 1,
-    display: node.visible ? undefined : "none",
-  };
+function docBounds(pages: StudioNode[]): { left: number; top: number; right: number; bottom: number } | null {
+  let left = Infinity;
+  let top = Infinity;
+  let right = -Infinity;
+  let bottom = -Infinity;
+  for (const p of pages) {
+    left = Math.min(left, p.x);
+    top = Math.min(top, p.y);
+    right = Math.max(right, p.x + p.width);
+    bottom = Math.max(bottom, p.y + p.height);
+  }
+  if (left === Infinity) return null;
+  return { left, top, right, bottom };
 }
 
 interface NodeViewProps {
   node: StudioNode;
   doc: Document;
+  isPage: boolean;
   live: LiveOverride | null;
   selectedIds: string[];
   showHandles: boolean;
@@ -177,13 +243,16 @@ interface NodeViewProps {
   interactive: boolean;
   onNodePointerDown: (e: React.PointerEvent, node: StudioNode) => void;
   onHandlePointerDown: (e: React.PointerEvent, node: StudioNode, handle: Handle) => void;
+  onContextMenu: (e: React.MouseEvent, node: StudioNode) => void;
   onEditStart: (id: string) => void;
   onEditCommit: (id: string, value: string) => void;
   onEditCancel: () => void;
 }
 
+const STATUS_LABEL: Record<string, string> = { design: "설계중", ready: "개발준비", done: "완료" };
+
 function NodeView(props: NodeViewProps): React.ReactElement {
-  const { node, doc, live, selectedIds, showHandles, editId, interactive, onNodePointerDown, onHandlePointerDown, onEditStart, onEditCommit, onEditCancel } = props;
+  const { node, doc, isPage, live, selectedIds, showHandles, editId, interactive, onNodePointerDown, onHandlePointerDown, onContextMenu, onEditStart, onEditCommit, onEditCancel } = props;
   const selected = selectedIds.includes(node.id);
   const editing = editId === node.id;
   // Rigid group move: while dragging one member of the selection, every other
@@ -200,6 +269,7 @@ function NodeView(props: NodeViewProps): React.ReactElement {
       className={`canvas-node${selected ? " selected" : ""}`}
       style={style}
       onPointerDown={interactive && !editing ? (e) => onNodePointerDown(e, node) : undefined}
+      onContextMenu={(e) => onContextMenu(e, node)}
       onDoubleClick={
         interactive && !editing && node.text
           ? (e) => {
@@ -209,6 +279,14 @@ function NodeView(props: NodeViewProps): React.ReactElement {
           : undefined
       }
     >
+      {(isPage || node.devStatus !== "design") && (
+        <div className="node-label">
+          {isPage && <span className="node-name">{node.name}</span>}
+          {node.devStatus !== "design" && (
+            <span className={`status-chip ${node.devStatus}`}>{STATUS_LABEL[node.devStatus]}</span>
+          )}
+        </div>
+      )}
       {(isText || node.text) &&
         (editing ? (
           <textarea
@@ -260,7 +338,7 @@ function NodeView(props: NodeViewProps): React.ReactElement {
           </span>
         ))}
       {node.children.map((c) => (
-        <NodeView key={c.id} {...props} node={c} />
+        <NodeView key={c.id} {...props} isPage={false} node={c} />
       ))}
       {selected && interactive && !editing && showHandles && (
         <>
@@ -278,7 +356,7 @@ function NodeView(props: NodeViewProps): React.ReactElement {
   );
 }
 
-export default function CanvasView(): React.ReactElement {
+export default function CanvasView({ measureTick = 0 }: { measureTick?: number }): React.ReactElement {
   const { state, dispatch } = useStore();
   const viewportRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<DragState | null>(null);
@@ -287,9 +365,16 @@ export default function CanvasView(): React.ReactElement {
   const [spaceDown, setSpaceDown] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
   const [marquee, setMarquee] = useState<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
+  const [menuTarget, setMenuTarget] = useState<{ x: number; y: number; nodeId: string | null } | null>(null);
 
-  const placed = useMemo(() => relayoutTree(state.doc.root), [state.doc.root]);
+  const placedPages = useMemo(() => state.doc.pages.map((p) => relayoutTree(p)), [state.doc.pages, measureTick]);
   const interactive = state.tool === "select";
+
+  function onContextMenu(e: React.MouseEvent, node: StudioNode | null): void {
+    e.preventDefault();
+    e.stopPropagation();
+    setMenuTarget({ x: e.clientX, y: e.clientY, nodeId: node ? node.id : null });
+  }
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -335,6 +420,49 @@ export default function CanvasView(): React.ReactElement {
     return () => el.removeEventListener("wheel", onWheel);
   }, [state.zoom, state.panX, state.panY, dispatch]);
 
+  function fitTo(bounds: { left: number; top: number; right: number; bottom: number } | null): void {
+    const el = viewportRef.current;
+    if (!el || !bounds) return;
+    const rect = el.getBoundingClientRect();
+    const w = Math.max(1, bounds.right - bounds.left);
+    const h = Math.max(1, bounds.bottom - bounds.top);
+    const zoom = Math.min((rect.width - 80) / w, (rect.height - 80) / h, 2);
+    dispatch({
+      type: "set-viewport",
+      zoom: Math.max(0.1, zoom),
+      panX: (rect.width - w * zoom) / 2 - bounds.left * zoom,
+      panY: (rect.height - h * zoom) / 2 - bounds.top * zoom,
+    });
+  }
+
+  function fitSelection(): void {
+    const bounds = { left: Infinity, top: Infinity, right: -Infinity, bottom: -Infinity };
+    let found = false;
+    function walk(node: StudioNode, absX: number, absY: number): void {
+      for (const c of node.children) {
+        const cx = absX + c.x;
+        const cy = absY + c.y;
+        if (state.selectedIds.includes(c.id)) {
+          found = true;
+          bounds.left = Math.min(bounds.left, cx);
+          bounds.top = Math.min(bounds.top, cy);
+          bounds.right = Math.max(bounds.right, cx + c.width);
+          bounds.bottom = Math.max(bounds.bottom, cy + c.height);
+        }
+        walk(c, cx, cy);
+      }
+    }
+    for (const p of placedPages) walk(p, p.x, p.y);
+    fitTo(found ? bounds : docBounds(placedPages));
+  }
+
+  // Exposed for keyboard shortcuts through a lightweight event contract.
+  useEffect(() => {
+    const handler = () => fitTo(docBounds(placedPages));
+    window.addEventListener("ds-fit-all", handler);
+    return () => window.removeEventListener("ds-fit-all", handler);
+  }, [placedPages]);
+
   function toDoc(e: { clientX: number; clientY: number }): { x: number; y: number } {
     const rect = viewportRef.current?.getBoundingClientRect();
     if (!rect) return { x: 0, y: 0 };
@@ -370,26 +498,9 @@ export default function CanvasView(): React.ReactElement {
       panY0: state.panY,
     };
     if (node && handle) {
-      dragRef.current = {
-        ...base,
-        kind: "resize",
-        id: node.id,
-        handle,
-        nodeX: node.x,
-        nodeY: node.y,
-        nodeW: node.width,
-        nodeH: node.height,
-      };
+      dragRef.current = { ...base, kind: "resize", id: node.id, handle, nodeX: node.x, nodeY: node.y, nodeW: node.width, nodeH: node.height };
     } else if (node) {
-      dragRef.current = {
-        ...base,
-        kind: "move",
-        id: node.id,
-        nodeX: node.x,
-        nodeY: node.y,
-        nodeW: node.width,
-        nodeH: node.height,
-      };
+      dragRef.current = { ...base, kind: "move", id: node.id, nodeX: node.x, nodeY: node.y, nodeW: node.width, nodeH: node.height };
     } else {
       dragRef.current = base;
     }
@@ -397,18 +508,8 @@ export default function CanvasView(): React.ReactElement {
 
   function onNodePointerDown(e: React.PointerEvent, node: StudioNode): void {
     if (!interactive || spaceRef.current) return;
-    if (node.id === placed.id) {
-      // The root frame covers the whole document; dragging from its
-      // background starts a marquee over children (Figma canvas behavior),
-      // a plain click deselects. The root stays selectable via the layers
-      // panel.
-      startMarquee(e);
-      return;
-    }
     if (e.shiftKey || e.metaKey || e.ctrlKey) {
       dispatch({ type: "select-toggle", id: node.id });
-      // Modifier-click only changes membership; dragging after it moves the
-      // resulting set, so still start a drag from this node.
       beginDrag(e, node);
       return;
     }
@@ -421,30 +522,6 @@ export default function CanvasView(): React.ReactElement {
   function onHandlePointerDown(e: React.PointerEvent, node: StudioNode, handle: Handle): void {
     if (!interactive) return;
     beginDrag(e, node, handle);
-  }
-
-  function onViewportPointerDown(e: React.PointerEvent): void {
-    if (spaceRef.current) {
-      beginDrag(e, null);
-      return;
-    }
-    if (!interactive) {
-      const p = toDoc(e);
-      const maker = NEW_NODE_DEFAULTS[state.tool as Exclude<Tool, "select">];
-      const node = maker();
-      if (node.kind === "text") {
-        node.width = textWidth(node);
-        node.height = textHeight(node);
-      }
-      node.x = p.x;
-      node.y = p.y;
-      dispatch({ type: "create", node, parentId: state.doc.root.id });
-      dispatch({ type: "set-tool", tool: "select" });
-      return;
-    }
-    // Select tool on empty canvas: start a marquee. A click (no drag)
-    // deselects on pointerup.
-    startMarquee(e);
   }
 
   function startMarquee(e: React.PointerEvent): void {
@@ -470,6 +547,32 @@ export default function CanvasView(): React.ReactElement {
       panY0: state.panY,
     };
     setMarquee({ x0: p.x, y0: p.y, x1: p.x, y1: p.y });
+  }
+
+  function onViewportPointerDown(e: React.PointerEvent): void {
+    if (spaceRef.current) {
+      beginDrag(e, null);
+      return;
+    }
+    if (!interactive) {
+      const p = toDoc(e);
+      const maker = NEW_NODE_DEFAULTS[state.tool as Exclude<Tool, "select">];
+      const node = maker();
+      if (node.kind === "text") {
+        node.width = textWidth(node);
+        node.height = textHeight(node);
+      }
+      node.x = p.x;
+      node.y = p.y;
+      const pageId = state.doc.pages[activePageIndex(state.doc, state.selectedIds)].id;
+      dispatch({ type: "create", node, parentId: pageId });
+      dispatch({ type: "set-tool", tool: "select" });
+      return;
+    }
+    // Select tool on empty canvas (outside every page): marquee. A click
+    // (no drag) deselects on pointerup. Pages are ordinary nodes now, so
+    // dragging inside a page selects/moves that page.
+    startMarquee(e);
   }
 
   function onPointerMove(e: React.PointerEvent): void {
@@ -535,7 +638,7 @@ export default function CanvasView(): React.ReactElement {
         if (w < 3 || h < 3) {
           dispatch({ type: "select", id: null });
         } else {
-          dispatch({ type: "select-many", ids: marqueeHit(m, placed) });
+          dispatch({ type: "select-many", ids: marqueeHit(m, placedPages) });
         }
       }
       return;
@@ -569,35 +672,46 @@ export default function CanvasView(): React.ReactElement {
     }
   }
 
+  const pageViews = placedPages.map((page) => (
+    <div key={page.id} style={{ position: "absolute", left: page.x, top: page.y }}>
+      <NodeView
+        node={page}
+        doc={state.doc}
+        isPage
+        live={live}
+        selectedIds={state.selectedIds}
+        showHandles={state.selectedIds.length === 1}
+        editId={editId}
+        interactive={interactive}
+        onNodePointerDown={onNodePointerDown}
+        onHandlePointerDown={onHandlePointerDown}
+        onContextMenu={onContextMenu}
+        onEditStart={setEditId}
+        onEditCommit={(id, value) => {
+          dispatch({ type: "set-props", id, patch: { text: { text: value } } });
+          setEditId(null);
+        }}
+        onEditCancel={() => setEditId(null)}
+      />
+    </div>
+  ));
+
   return (
     <div
       ref={viewportRef}
       className={`canvas-viewport${spaceDown ? " panning" : ""}${interactive ? "" : " creating"}`}
+      role="application"
+      aria-label="디자인 캔버스"
       onPointerDown={onViewportPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
+      onContextMenu={(e) => onContextMenu(e, null)}
     >
       <div
         className="canvas-surface"
         style={{ transform: `translate(${state.panX}px, ${state.panY}px) scale(${state.zoom})` }}
       >
-        <NodeView
-          node={placed}
-          doc={state.doc}
-          live={live}
-          selectedIds={state.selectedIds.includes(placed.id) ? state.selectedIds.filter((i) => i !== placed.id) : state.selectedIds}
-          showHandles={state.selectedIds.length === 1}
-          editId={editId}
-          interactive={interactive}
-          onNodePointerDown={onNodePointerDown}
-          onHandlePointerDown={onHandlePointerDown}
-          onEditStart={setEditId}
-          onEditCommit={(id, value) => {
-            dispatch({ type: "set-props", id, patch: { text: { text: value } } });
-            setEditId(null);
-          }}
-          onEditCancel={() => setEditId(null)}
-        />
+        {pageViews}
         {marquee && (
           <div
             style={{
@@ -614,8 +728,15 @@ export default function CanvasView(): React.ReactElement {
         )}
       </div>
       <div className="canvas-statusbar">
-        {Math.round(state.zoom * 100)}% · {state.doc.mode.toUpperCase()} · {state.doc.name}
+        {Math.round(state.zoom * 100)}% · {state.doc.mode.toUpperCase()} · {state.doc.pages.length}개 화면 · {state.doc.name}
+        <button className="fit-all" title="전체 보기 (Shift+1)" onClick={() => fitTo(docBounds(placedPages))}>
+          ⇧1
+        </button>
+        <button className="fit-all" title="선택 보기 (Shift+2)" onClick={fitSelection}>
+          ⇧2
+        </button>
       </div>
+      {menuTarget && <ContextMenu target={menuTarget} onClose={() => setMenuTarget(null)} />}
     </div>
   );
 }

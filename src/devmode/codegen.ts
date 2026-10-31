@@ -41,6 +41,46 @@ function colorValue(value: string | undefined, doc: Document): string {
   return resolveColor(value, doc) ?? value;
 }
 
+function firstSolid(fills: StudioNode["style"]["fills"]): string | undefined {
+  const solid = fills.find((f) => f.type === "solid");
+  return solid ? solid.color : undefined;
+}
+
+/** Native targets have no CSS-variable layer; the first solid (or first
+ * gradient stop) resolves to a literal color. */
+function nativeFillColor(fills: StudioNode["style"]["fills"], doc: Document): string | undefined {
+  const solid = firstSolid(fills);
+  if (solid !== undefined) return resolveColor(solid, doc) ?? solid;
+  const grad = fills.find((f) => f.type === "linear") as Extract<Paint_, { type: "linear" }> | undefined;
+  const stop = grad?.stops[0]?.color;
+  return stop !== undefined ? resolveColor(stop, doc) ?? stop : undefined;
+}
+
+function gradientCss(paint: Extract<Paint_, { type: "linear" }>, doc: Document): string {
+  const stops = paint.stops
+    .map((s) => `${resolveColor(s.color, doc) ?? s.color} ${Math.round(s.pos * 100)}%`)
+    .join(", ");
+  return `linear-gradient(${paint.angle}deg, ${stops})`;
+}
+
+function webFillCss(n: StudioNode, doc: Document): string | undefined {
+  const image = n.style.fills.find((f) => f.type === "image") as Extract<Paint_, { type: "image" }> | undefined;
+  if (image && image.src) return undefined;
+  const grad = n.style.fills.find((f) => f.type === "linear") as Extract<Paint_, { type: "linear" }> | undefined;
+  if (grad) return gradientCss(grad, doc);
+  const solid = firstSolid(n.style.fills);
+  return solid !== undefined ? colorValue(solid, doc) : undefined;
+}
+
+function shadowCss(n: StudioNode, doc: Document): string | undefined {
+  if (n.style.effects.length === 0) return undefined;
+  return n.style.effects
+    .map((e) => `${e.x}px ${e.y}px ${e.blur}px ${resolveColor(e.color, doc) ?? e.color}`)
+    .join(", ");
+}
+
+type Paint_ = StudioNode["style"]["fills"][number];
+
 function indent(depth: number): string {
   return "  ".repeat(depth);
 }
@@ -65,7 +105,12 @@ export function toReact(root: StudioNode, doc: Document): string {
       `width: ${Math.round(n.width)}`,
       `height: ${Math.round(n.height)}`,
     ];
-    if (n.style.fill !== undefined) entries.push(`background: "${colorValue(n.style.fill, doc)}"`);
+    const webFill = webFillCss(n, doc);
+    if (webFill !== undefined) entries.push(`background: "${webFill}"`);
+    const image = n.style.fills.find((f) => f.type === "image") as Extract<Paint_, { type: "image" }> | undefined;
+    if (image?.src) entries.push(`backgroundImage: "url('${image.src.replace(/'/g, "%27")}')"`);
+    const shadow = shadowCss(n, doc);
+    if (shadow) entries.push(`boxShadow: "${shadow}"`);
     if (n.style.radius) entries.push(`borderRadius: ${n.style.radius === 999 ? '"50%"' : n.style.radius}`);
     if (n.style.stroke && n.style.strokeWidth) {
       entries.push(`border: "${n.style.strokeWidth}px solid ${colorValue(n.style.stroke, doc)}"`);
@@ -117,7 +162,10 @@ export function toCss(root: StudioNode, doc: Document): string {
       `  width: ${Math.round(n.width)}px;`,
   `  height: ${Math.round(n.height)}px;`,
     ];
-    if (n.style.fill !== undefined) lines.push(`  background: ${colorValue(n.style.fill, doc)};`);
+    const cssFill = webFillCss(n, doc);
+    if (cssFill !== undefined) lines.push(`  background: ${cssFill};`);
+    const cssShadow = shadowCss(n, doc);
+    if (cssShadow) lines.push(`  box-shadow: ${cssShadow};`);
     if (n.style.radius) lines.push(`  border-radius: ${n.style.radius === 999 ? "50%" : `${n.style.radius}px`};`);
     if (n.style.stroke && n.style.strokeWidth) {
       lines.push(`  border: ${n.style.strokeWidth}px solid ${colorValue(n.style.stroke, doc)};`);
@@ -138,7 +186,10 @@ export function toTailwind(root: StudioNode, doc: Document): string {
       `w-[${Math.round(n.width)}px]`,
       `h-[${Math.round(n.height)}px]`,
     ];
-    if (n.style.fill !== undefined) parts.push(`bg-[${colorValue(n.style.fill, doc)}]`);
+    const twFill = webFillCss(n, doc);
+    if (twFill !== undefined) parts.push(`bg-[${twFill.replace(/,\s*/g, "_").replace(/\s+/g, "_")}]`);
+    const twShadow = shadowCss(n, doc);
+    if (twShadow) parts.push(`shadow-[${twShadow.replace(/,\s*/g, "_").replace(/\s+/g, "_")}]`);
     if (n.style.radius) parts.push(n.style.radius === 999 ? "rounded-full" : `rounded-[${n.style.radius}px]`);
     if (n.style.stroke && n.style.strokeWidth) {
       parts.push(`border-[${n.style.strokeWidth}px] border-[${colorValue(n.style.stroke, doc)}]`);
@@ -185,14 +236,25 @@ export function toSwiftUI(root: StudioNode, doc: Document): string {
   function shape(n: StudioNode, absX: number, absY: number, depth: number): string {
     const pad = "    ".repeat(depth);
     const lines: string[] = [`// ${n.name}`];
-    if (n.style.fill !== undefined || n.kind === "frame" || n.kind === "rect" || n.kind === "ellipse") {
+    const nativeFill = nativeFillColor(n.style.fills, doc);
+    if (nativeFill !== undefined || n.kind === "frame" || n.kind === "rect" || n.kind === "ellipse") {
       const radius = n.style.radius === 999 || n.kind === "ellipse" ? Math.round(Math.min(n.width, n.height) / 2) : n.style.radius ?? 0;
       lines.push(
         `${pad}RoundedRectangle(cornerRadius: ${radius}, style: .continuous)`,
-        `${pad}    .fill(${n.style.fill !== undefined ? swiftColor(n.style.fill, doc) : "Color.clear"})`,
+        `${pad}    .fill(${nativeFill !== undefined ? swiftColor(nativeFill, doc) : "Color.clear"})`,
         `${pad}    .frame(width: ${Math.round(n.width)}, height: ${Math.round(n.height)})`,
         `${pad}    .position(x: ${Math.round(absX + n.width / 2)}, y: ${Math.round(absY + n.height / 2)})`
       );
+      const swiftShadow = n.style.effects.find((e) => e.type === "drop-shadow");
+      if (swiftShadow) {
+        lines.push(
+          `${pad}RoundedRectangle(cornerRadius: ${radius}, style: .continuous)`,
+          `${pad}    .fill(${nativeFill !== undefined ? swiftColor(nativeFill, doc) : "Color.clear"})`,
+          `${pad}    .shadow(color: ${swiftColor(swiftShadow.color, doc)}, radius: ${swiftShadow.blur / 2}, x: ${swiftShadow.x}, y: ${swiftShadow.y})`,
+          `${pad}    .frame(width: ${Math.round(n.width)}, height: ${Math.round(n.height)})`,
+          `${pad}    .position(x: ${Math.round(absX + n.width / 2)}, y: ${Math.round(absY + n.height / 2)})`
+        );
+      }
       if (n.style.stroke && n.style.strokeWidth) {
         lines.push(
           `${pad}RoundedRectangle(cornerRadius: ${radius}, style: .continuous)`,
@@ -259,8 +321,8 @@ export function toCompose(root: StudioNode, doc: Document): string {
         `${pad}    modifier = Modifier`,
         `${pad}        .size(${Math.round(n.width)}.dp, ${Math.round(n.height)}.dp)`,
         `${pad}        .absoluteOffset(x = ${Math.round(absX)}.dp, y = ${Math.round(absY)}.dp)`,
-        ...(n.style.fill !== undefined
-          ? [`${pad}        .background(${composeColor(n.style.fill, doc)}, shape = RoundedCornerShape(${n.style.radius ?? 0}.dp))`]
+        ...(nativeFillColor(n.style.fills, doc) !== undefined
+          ? [`${pad}        .background(${composeColor(nativeFillColor(n.style.fills, doc) as string, doc)}, shape = RoundedCornerShape(${n.style.radius ?? 0}.dp))`]
           : []),
         `${pad})`
       );

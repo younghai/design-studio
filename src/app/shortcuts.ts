@@ -29,7 +29,7 @@ export function useShortcuts(): void {
       }
       if (meta && e.key.toLowerCase() === "a") {
         e.preventDefault();
-        dispatch({ type: "select-many", ids: state.doc.root.children.map((c) => c.id) });
+        dispatch({ type: "select-many", ids: state.doc.pages.map((p) => p.id) });
         return;
       }
       if (meta && e.key.toLowerCase() === "d" && hasSelection) {
@@ -53,6 +53,21 @@ export function useShortcuts(): void {
         dispatch({ type: "paste" });
         return;
       }
+      if (e.shiftKey && (e.code === "Digit1" || e.code === "Digit2" || e.code === "Digit0")) {
+        e.preventDefault();
+        if (e.code === "Digit1") window.dispatchEvent(new Event("ds-fit-all"));
+        if (e.code === "Digit2") window.dispatchEvent(new Event("ds-fit-selection"));
+        if (e.code === "Digit0") dispatch({ type: "set-viewport", zoom: 1, panX: 40, panY: 40 });
+        return;
+      }
+      if (hasSelection && ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key)) {
+        e.preventDefault();
+        const step = e.shiftKey ? 10 : 1;
+        const dx = e.key === "ArrowLeft" ? -step : e.key === "ArrowRight" ? step : 0;
+        const dy = e.key === "ArrowUp" ? -step : e.key === "ArrowDown" ? step : 0;
+        dispatch({ type: "move-set", ids: state.selectedIds, dx, dy });
+        return;
+      }
       if ((e.key === "Delete" || e.key === "Backspace") && hasSelection) {
         e.preventDefault();
         dispatch({ type: "delete-set", ids: state.selectedIds });
@@ -71,5 +86,5 @@ export function useShortcuts(): void {
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [dispatch, hasSelection, state.selectedIds, state.devMode, state.doc.root]);
+  }, [dispatch, hasSelection, state.selectedIds, state.devMode, state.doc.pages]);
 }

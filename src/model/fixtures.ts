@@ -1,4 +1,5 @@
 import type {
+  DevStatus,
   Document,
   LayoutDir,
   LayoutSpec,
@@ -8,7 +9,7 @@ import type {
   TextProps,
   VariableCollection,
 } from "./types";
-import { defaultLayout, textHeight, textWidth } from "./types";
+import { defaultLayout, solid, textHeight, textWidth } from "./types";
 import easeSpec from "../fixtures/easeui-agent-console.spec.json";
 
 interface SpecNode {
@@ -23,6 +24,7 @@ interface SpecNode {
   stroke?: string;
   stroke_width?: number;
   radius?: number;
+  dev_status?: string;
   text?: string;
   font_size?: number;
   font_weight?: number;
@@ -38,35 +40,35 @@ interface SpecNode {
 }
 
 interface PresetDefault {
-  style?: StyleProps;
+  style?: Partial<StyleProps>;
   text?: Partial<TextProps>;
   layout?: { dir?: LayoutDir; gap?: number; padding?: [number, number, number, number] };
 }
 
 const PRESETS: Record<string, PresetDefault> = {
-  "easeui-screen": { style: { fill: "#0d1117" } },
+  "easeui-screen": { style: { fills: [solid("#0d1117")] } },
   "easeui-panel": { style: { radius: 12 } },
   "easeui-card": {
     style: {
-      fill: "$easeui.bg.panel",
+      fills: [solid("$easeui.bg.panel")],
       stroke: "$easeui.border.subtle",
       strokeWidth: 1,
       radius: 12,
     },
   },
   "easeui-badge": {
-    style: { fill: "$easeui.accent.blue", radius: 999 },
+    style: { fills: [solid("$easeui.accent.blue")], radius: 999 },
     text: { fontSize: 10, fontWeight: 600, color: "#ffffff" },
     layout: { dir: "row", padding: [3, 8, 3, 8] },
   },
   "easeui-button-primary": {
-    style: { fill: "$easeui.accent.blue", radius: 8 },
+    style: { fills: [solid("$easeui.accent.blue")], radius: 8 },
     text: { fontSize: 12, fontWeight: 600, color: "#ffffff" },
     layout: { dir: "row", padding: [6, 14, 6, 14] },
   },
   "easeui-button-secondary": {
     style: {
-      fill: "$easeui.bg.panel",
+      fills: [solid("$easeui.bg.panel")],
       stroke: "$easeui.border.subtle",
       strokeWidth: 1,
       radius: 8,
@@ -86,6 +88,7 @@ export const CORE_COLLECTION: VariableCollection = {
     "text.primary": { light: "#111418", dark: "#f5f5f5" },
     "border.default": { light: "#d5d9e0", dark: "#383838" },
     "brand": { light: "#0d99ff", dark: "#0d99ff" },
+    "accent.violet": { light: "#7c3aed", dark: "#8b5cf6" },
   },
 };
 
@@ -136,11 +139,18 @@ function toTextProps(spec: SpecNode, preset: PresetDefault | undefined): TextPro
   };
 }
 
+function toDevStatus(raw: string | undefined): DevStatus {
+  return raw === "ready" || raw === "done" ? raw : "design";
+}
+
 export function specNodeToNode(spec: SpecNode): StudioNode {
   const preset = spec.preset ? PRESETS[spec.preset] : undefined;
   const isText = spec.kind === "text";
   const text = isText || spec.text !== undefined ? toTextProps(spec, preset) : undefined;
 
+  const presetFill = preset?.style?.fills?.[0];
+  const fillColor =
+    spec.fill ?? (presetFill?.type === "solid" ? presetFill.color : undefined);
   const node: StudioNode = {
     id: nextId(),
     name: spec.name ?? spec.preset ?? spec.kind ?? "node",
@@ -152,14 +162,16 @@ export function specNodeToNode(spec: SpecNode): StudioNode {
     sizingW: spec.width !== undefined ? "fixed" : "hug",
     sizingH: spec.height !== undefined ? "fixed" : "hug",
     visible: true,
+    devStatus: toDevStatus(spec.dev_status),
     layout: toLayout(spec, preset),
     text,
     style: {
-      fill: spec.fill ?? preset?.style?.fill,
+      fills: fillColor !== undefined ? [solid(fillColor)] : [],
       stroke: spec.stroke ?? preset?.style?.stroke,
       strokeWidth: spec.stroke_width ?? preset?.style?.strokeWidth,
       radius: spec.radius ?? preset?.style?.radius,
       opacity: 1,
+      effects: [],
     },
     children: [],
   };
@@ -173,17 +185,16 @@ export function specNodeToNode(spec: SpecNode): StudioNode {
 
 export function specToDocument(spec: SpecNode, mode: Mode = "dark"): Document {
   const root = specNodeToNode(spec);
-  // A spec's root x/y are placement metadata from the source canvas (the
-  // easeui fixture ships at y=1200). In the editor the root IS the document
-  // origin, so normalize it to (0,0) or the whole screen renders off-view.
+  // A spec's root x/y are placement metadata from the source canvas; in the
+  // editor the first page starts at (0,0) or it renders off-view.
   root.x = 0;
   root.y = 0;
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     name: spec.name ?? "Untitled",
     mode,
     collections: [CORE_COLLECTION, EASEUI_COLLECTION],
-    root,
+    pages: [root],
   };
 }
 

@@ -32,7 +32,8 @@ src/
 | Add codegen target (SwiftUI, Compose…) | `src/devmode/codegen.ts` — add `to<Target>`, register in CodegenPanel tabs |
 | Change layout math | `src/model/relayout.ts` (sizeNode/placeChildren) |
 | Add a variable token | `src/model/fixtures.ts` collections (`CORE_COLLECTION`, `EASEUI_COLLECTION`) |
-| Undo/redo behavior | `src/state/store.tsx` (`withUndo` call sites define what is undoable) |
+| Undo/redo behavior | `src/state/store.tsx` (`withUndo` + coalescing via `lastEdit`) |
+| Add a canvas overlay (menu/palette) | DOM position matters: overlays inside `.canvas-viewport` must stopPropagation on pointerdown or the marquee's pointer capture eats their clicks |
 | Keyboard shortcuts | `src/app/shortcuts.ts` (canvas-local: Space pan lives in CanvasView) |
 | NodeSpec field mapping | in: `fixtures.ts specNodeToNode` · out: `documentIo.ts specFromDocument` |
 | CI/deploy | `.github/workflows/deploy.yml` (push main → build → Pages) |
@@ -44,7 +45,7 @@ src/
 - `relayoutTree` is pure: clones input, never mutates. Callers re-run it per render (memoized on `doc.root`).
 - Undo discipline: document mutations push one snapshot; UI state (tool/zoom/pan/selection) and `mode` never do. `mode` is view-state — undo/redo preserve the current mode; autosave restore (`restore` action) pushes nothing; explicit import/spec-apply (`load-document`) is undoable.
 - Pointer drags keep live geometry in `dragRef.latest` (mutable ref) and dispatch exactly ONE action on pointerup. Never commit from React state — same-frame move+up races exist.
-- Storage: key `design-studio-doc-v1`, `schemaVersion: 1`. Mismatch ⇒ discard silently (import surfaces the error, autosave just drops).
+- Storage: key `design-studio-doc-v1`, `schemaVersion: 2` (pages[] + paints + effects + devStatus). v1 docs validate then migrate in `documentIo.migrateV1Document` at load; unknown versions ⇒ discard silently.
 - `.npmrc`/`pnpm-workspace.yaml` are LOCAL-ONLY (shared pnpm store at `../.pnpm-store` per workspace policy) and untracked. CI uses pnpm defaults. Do not commit them.
 - NodeSpec JSON (external format) is snake_case (`font_size`); internal model is camelCase. Only `fixtures.ts`/`documentIo.ts` translate.
 

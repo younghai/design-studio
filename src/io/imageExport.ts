@@ -1,53 +1,97 @@
 import type { Document, StudioNode } from "../model/types";
+import type { Paint } from "../model/types";
 import { resolveColor } from "../model/variables";
 
 function esc(text: string): string {
   return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
-// Attribute values (fill/stroke/color) can carry arbitrary spec strings;
+// Attribute values (fills/strokes/colors) can carry arbitrary spec strings;
 // escaping blocks breakout like: red" onload="alert(1)
 function attr(value: string): string {
   return esc(value);
 }
 
-function shapeSvg(n: StudioNode, doc: Document, absX: number, absY: number): string {
-  const fill = resolveColor(n.style.fill, doc) ?? "none";
+interface SvgOut {
+  defs: string[];
+  body: string[];
+}
+
+let gradientSeq = 0;
+
+function paintFill(paint: Paint | undefined, doc: Document, out: SvgOut): string {
+  if (!paint) return "none";
+  if (paint.type === "solid") return attr(resolveColor(paint.color, doc) ?? paint.color);
+  if (paint.type === "linear") {
+    gradientSeq += 1;
+    const id = `ds-grad-${gradientSeq}`;
+    // CSS angles run clockwise from "to top"; convert to SVG bbox coords.
+    const rad = (paint.angle * Math.PI) / 180;
+    const dx = Math.sin(rad) / 2;
+    const dy = -Math.cos(rad) / 2;
+    const stops = paint.stops
+      .map((s) => `<stop offset="${Math.round(s.pos * 100)}%" stop-color="${attr(resolveColor(s.color, doc) ?? s.color)}"/>`)
+      .join("");
+    out.defs.push(
+      `<linearGradient id="${id}" x1="${0.5 - dx}" y1="${0.5 - dy}" x2="${0.5 + dx}" y2="${0.5 + dy}">${stops}</linearGradient>`
+    );
+    return `url(#${id})`;
+  }
+  return "none";
+}
+
+function shapeSvg(n: StudioNode, doc: Document, absX: number, absY: number, out: SvgOut): void {
+  const paint = n.style.fills.find((f) => f.type === "solid" || f.type === "linear");
+  const fill = paintFill(paint, doc, out);
+  const image = n.style.fills.find((f) => f.type === "image") as Extract<Paint, { type: "image" }> | undefined;
   const stroke = resolveColor(n.style.stroke, doc);
   const strokeWidth = n.style.strokeWidth ?? 0;
   const opacity = n.style.opacity ?? 1;
-  const common = `opacity="${opacity}"${stroke ? ` stroke="${attr(stroke)}" stroke-width="${strokeWidth}"` : ""}`;
-  const w = Math.max(0, n.width);
-  const h = Math.max(0, n.height);
 
-  let shape: string;
-  if (n.kind === "ellipse") {
-    shape = `<ellipse cx="${absX + w / 2}" cy="${absY + h / 2}" rx="${w / 2}" ry="${h / 2}" fill="${attr(fill)}" ${common}/>`;
-  } else {
-    shape = `<rect x="${absX}" y="${absY}" width="${w}" height="${h}" rx="${n.style.radius ?? 0}" fill="${attr(fill)}" ${common}/>`;
+  const shadow = n.style.effects.find((e) => e.type === "drop-shadow");
+  let filterAttr = "";
+  if (shadow) {
+    gradientSeq += 1;
+    const id = `ds-shadow-${gradientSeq}`;
+    out.defs.push(
+      `<filter id="${id}" x="-50%" y="-50%" width="200%" height="200%"><feDropShadow dx="${shadow.x}" dy="${shadow.y}" stdDeviation="${shadow.blur / 2}" flood-color="${attr(resolveColor(shadow.color, doc) ?? shadow.color)}"/></filter>`
+    );
+    filterAttr = ` filter="url(#${id})"`;
   }
 
-  let textSvg = "";
+  const w = Math.max(0, n.width);
+  const h = Math.max(0, n.height);
+  const common = `${filterAttr}${stroke ? ` stroke="${attr(stroke)}" stroke-width="${strokeWidth}"` : ""}`;
+
+  if (n.kind === "ellipse") {
+    out.body.push(`<ellipse cx="${absX + w / 2}" cy="${absY + h / 2}" rx="${w / 2}" ry="${h / 2}" fill="${fill}" opacity="${opacity}"${common}/>`);
+  } else {
+    out.body.push(`<rect x="${absX}" y="${absY}" width="${w}" height="${h}" rx="${n.style.radius ?? 0}" fill="${fill}" opacity="${opacity}"${common}/>`);
+  }
+  if (image?.src) {
+    out.body.push(`<image href="${attr(image.src)}" x="${absX}" y="${absY}" width="${w}" height="${h}" preserveAspectRatio="xMidYMid slice" opacity="${opacity}"/>`);
+  }
+
   if (n.text) {
     const color = resolveColor(n.text.color, doc) ?? "#000000";
     const baseline = absY + (n.kind === "text" ? n.text.fontSize * 1.0 : h / 2 + n.text.fontSize * 0.35);
     const tx = n.kind === "text" ? absX : absX + 8;
-    textSvg = `<text x="${tx}" y="${baseline}" font-family="Inter, sans-serif" font-size="${n.text.fontSize}" font-weight="${n.text.fontWeight}" fill="${attr(color)}">${esc(n.text.text)}</text>`;
+    out.body.push(`<text x="${tx}" y="${baseline}" font-family="Inter, sans-serif" font-size="${n.text.fontSize}" font-weight="${n.text.fontWeight}" fill="${attr(color)}">${esc(n.text.text)}</text>`);
   }
-  return shape + textSvg;
 }
 
 export function nodeToSvg(root: StudioNode, doc: Document): string {
-  const parts: string[] = [];
+  const out: SvgOut = { defs: [], body: [] };
   function walk(n: StudioNode, absX: number, absY: number): void {
     if (!n.visible) return;
-    parts.push(shapeSvg(n, doc, absX, absY));
+    shapeSvg(n, doc, absX, absY, out);
     n.children.forEach((c) => walk(c, absX + c.x, absY + c.y));
   }
   walk(root, 0, 0);
   const w = Math.round(root.width);
   const h = Math.round(root.height);
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">${parts.join("\n")}</svg>`;
+  const defs = out.defs.length > 0 ? `<defs>${out.defs.join("")}</defs>` : "";
+  return `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">${defs}${out.body.join("\n")}</svg>`;
 }
 
 function download(href: string, filename: string): void {

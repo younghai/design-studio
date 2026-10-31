@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from "react";
-import { findNode, useStore } from "../state/store";
+import { activePageIndex, findNode, useStore } from "../state/store";
 import { relayoutTree } from "../model/relayout";
 import { toCompose, toCss, toReact, toSwiftUI, toTailwind } from "./codegen";
 import "../panels/panels.css";
@@ -19,17 +19,26 @@ export default function CodegenPanel(): React.ReactElement {
   const [target, setTarget] = useState<Target>("react");
   const [copied, setCopied] = useState(false);
 
-  const placed = useMemo(() => relayoutTree(state.doc.root), [state.doc.root]);
-  const hit = state.primaryId ? findNode(placed, state.primaryId) : null;
-  const selected = hit?.node ?? placed;
+  const placedPages = useMemo(() => state.doc.pages.map((p) => relayoutTree(p)), [state.doc.pages]);
+  const activeIndex = activePageIndex(state.doc, state.selectedIds);
+  let selected: ReturnType<typeof relayoutTree> | null = null;
+  for (const page of placedPages) {
+    const hit = state.primaryId ? findNode(page, state.primaryId) : null;
+    if (hit) {
+      selected = hit.node;
+      break;
+    }
+  }
+  const fallback = placedPages[activeIndex] ?? placedPages[0];
 
+  const chosen = selected ?? fallback;
   const code = useMemo(() => {
-    if (target === "react") return toReact(selected, state.doc);
-    if (target === "css") return toCss(selected, state.doc);
-    if (target === "tailwind") return toTailwind(selected, state.doc);
-    if (target === "swiftui") return toSwiftUI(selected, state.doc);
-    return toCompose(selected, state.doc);
-  }, [selected, state.doc, target]);
+    if (target === "react") return toReact(chosen, state.doc);
+    if (target === "css") return toCss(chosen, state.doc);
+    if (target === "tailwind") return toTailwind(chosen, state.doc);
+    if (target === "swiftui") return toSwiftUI(chosen, state.doc);
+    return toCompose(chosen, state.doc);
+  }, [chosen, state.doc, target]);
 
   function copy(): void {
     navigator.clipboard.writeText(code).then(
@@ -43,7 +52,7 @@ export default function CodegenPanel(): React.ReactElement {
 
   return (
     <div className="inspector-panel">
-      <div className="panel-header">Dev Mode — {selected.name}</div>
+      <div className="panel-header">Dev Mode — {chosen.name}</div>
       <div className="inspector-section">
         <div className="toolbar-group">
           {TABS.map((t) => (

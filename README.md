@@ -8,6 +8,7 @@
 pnpm install   # 이미 완료되어 있음
 pnpm dev       # http://localhost:5173
 pnpm build     # dist/ 프로덕션 번들 (tsc --noEmit + vite build)
+pnpm cli       # 스펙 JSON → 문서/SVG/코드 헤드리스 변환 (--spec, --out)
 ```
 
 ## 배포 (GitHub Pages)
@@ -22,11 +23,15 @@ Cloudflare Pages / Vercel / Netlify도 가능합니다. 빌드 커맨드 `pnpm b
 
 ## 기능
 
-- **문서 모델**: 프레임/텍스트/사각형/타원 노드 트리. 원본의 선언적 `NodeSpec` JSON과 필드 호환.
+- **다중 화면 문서 (schema v2)**: 한 문서에 여러 화면(페이지)을 무한 캔버스에 배치. v1 저장 문서는 로드 시 자동 마이그레이션.
+- **문서 모델**: 프레임/텍스트/사각형/타원 노드 트리. 원본의 선언적 `NodeSpec` JSON과 필드 호환. 채움은 단색·그라데이션·이미지, 효과는 드롭 섀도.
 - **Auto-Layout**: row/column 재귀 배치, gap/padding/align/justify, 노드별 Hug/Fill/Fixed 크기.
 - **라이브 변수**: `$collection.path` 별칭으로 색을 토큰에 바인딩. Light/Dark 모드 전환 시 캔버스가 즉시 재렌더됩니다. 변수 패널에서 모드별 값을 편집할 수 있습니다.
 - **캔버스 편집**: 클릭 선택, Shift/⌘ 클릭 다중 선택, 빈 캔버스 드래그 마키 선택(가지별 최상위), 강체 다중 이동, 8핸들 리사이즈, 스페이스 팬, ⌘+휠 줌, 더블클릭 텍스트 인라인 편집, ⌘C/⌘X/⌘V 클립보드.
 - **Dev Mode**(`Shift+D`): 선택 노드 서브트리를 React / CSS / Tailwind / SwiftUI / Jetpack Compose 코드로 생성하고 클립보드로 복사. 웹 타깃은 변수를 CSS 변수(`var(--token)`)로, 네이티브 타깃은 리졸브된 색 리터럴로 내보냅니다.
+- **개발 상태 워크플로**: 노드/화면에 설계중·개발준비·완료 상태(스펙의 `dev_status` 반영). 캔버스 배지 + 레이어 표시 + ⌘K·우클릭으로 변경.
+- **⌘K 커맨드 팔레트 / 우클릭 메뉴**: 모든 주요 동작을 키보드와 마우스 오른쪽 클릭에서.
+- **CLI** (`pnpm cli --spec x.spec.json --out dir`): 스펙 JSON을 문서·SVG·5종 코드로 변환하는 헤드리스 파이프라인. CI에서 "디자인=코드" 가능.
 - **이미지 내보내기**: 선택 서브트리(미선택 시 전체)를 SVG 또는 2x PNG로 내려받습니다.
 - **문서 IO**: NodeSpec JSON 스펙 적용(검증 후 원자적 적용, ⌘Z로 되돌리기), 문서 JSON 내보내기/가져오기, 500ms 디바운스 자동 저장(localStorage, `schemaVersion: 1`).
 - **시작 문서**: 원본의 `easeui-agent-console.spec.json`(53노드)이 변환되어 로드됩니다.
@@ -40,7 +45,10 @@ Cloudflare Pages / Vercel / Netlify도 가능합니다. 빌드 커맨드 `pnpm b
 | 캔버스 드래그 | 마키 선택 (빈 곳에서) |
 | `⌘A` | 최상위 노드 전체 선택 |
 | `Shift+D` | Dev Mode 토글 |
-| `⌘Z` / `⌘⇧Z` | 실행 취소 / 다시 실행 (스택 상한 50) |
+| `⌘Z` / `⌘⇧Z` | 실행 취소 / 다시 실행 (상한 50, 연속 편집은 자동 병합) |
+| `⌘K` | 커맨드 팔레트 |
+| `←` `→` `↑` `↓` | 선택 노드 누지 (1px, `Shift` 10px) |
+| `Shift+1` / `Shift+2` / `Shift+0` | 전체 보기 / 선택 보기 / 줌 100% |
 | `⌘D` | 선택 노드 복제 |
 | `⌘C` / `⌘X` / `⌘V` | 복사 / 잘라내기 / 붙여넣기 |
 | 텍스트 더블클릭 | 인라인 텍스트 편집 (Enter 확정, Esc 취소) |

@@ -337,20 +337,19 @@ test("shift-click builds a multi selection with a mixed inspector", async ({ pag
   await expect(page.locator(".inspector-panel input").first()).toHaveValue("Brand Title");
 });
 
-test("marquee drag selects top-level nodes under the rubber band", async ({ page }) => {
+test("marquee drag selects top-level pages under the rubber band", async ({ page }) => {
   await page.goto("/");
   await page.locator(".layer-row").first().waitFor();
 
-  // Canvas starts at x=220 (layers panel is 220px). Drag across the screen
-  // area: both top-level children (header + workspace) intersect; each
-  // absorbs its subtree, so exactly 2 nodes become selected.
+  // Canvas starts at x=220 (layers panel). Pages are now top-level nodes:
+  // a marquee over the screen selects the page itself (children absorbed).
   await page.mouse.move(260, 70);
   await page.mouse.down();
   await page.mouse.move(1250, 600, { steps: 6 });
   await page.mouse.up();
 
-  await expect(page.locator(".canvas-node.selected")).toHaveCount(2);
-  await expect(page.locator(".inspector-panel")).toContainText("2개 노드가 선택되었습니다");
+  await expect(page.locator(".canvas-node.selected")).toHaveCount(1);
+  await expect(page.locator(".inspector-panel")).toContainText("화면");
 });
 
 test("multi-select delete removes all in one undo step", async ({ page }) => {
@@ -404,4 +403,161 @@ test("marquee group drag moves the whole selection rigidly", async ({ page }) =>
   await expect(page.locator(".canvas-node.selected")).toHaveCount(2);
   await page.keyboard.press("ControlOrMeta+z");
   await expect(page.locator(".canvas-node.selected").nth(0)).toBeVisible();
+});
+
+test("v1 documents migrate to the v2 pages model on load", async ({ page }) => {
+  await page.goto("/");
+  await page.locator(".layer-row").first().waitFor();
+
+  await page.evaluate(() => {
+    const v1 = {
+      schemaVersion: 1,
+      name: "Legacy Doc",
+      mode: "dark",
+      collections: [],
+      root: {
+        id: "legacy-root",
+        name: "Legacy Screen",
+        kind: "frame",
+        x: 0,
+        y: 1200,
+        width: 800,
+        height: 600,
+        sizingW: "fixed",
+        sizingH: "fixed",
+        visible: true,
+        style: { fill: "#123456", opacity: 1 },
+        children: [],
+      },
+    };
+    localStorage.setItem("design-studio-doc-v1", JSON.stringify(v1));
+  });
+  await page.reload();
+  await page.locator(".canvas-statusbar").waitFor({ timeout: 5000 });
+
+  await expect(page.locator(".canvas-statusbar")).toContainText("Legacy Doc");
+  await expect(page.locator(".canvas-statusbar")).toContainText("1개 화면");
+  // autosave is debounced 500ms; wait for the migrated v2 doc to be written
+  await page.waitForFunction(() => {
+    const raw = localStorage.getItem("design-studio-doc-v1");
+    return raw !== null && JSON.parse(raw).schemaVersion === 2;
+  }, undefined, { timeout: 5000 });
+  const migrated = await page.evaluate(() => {
+    const doc = JSON.parse(localStorage.getItem("design-studio-doc-v1") ?? "{}");
+    return { schema: doc.schemaVersion, pages: doc.pages?.length, firstFill: doc.pages?.[0]?.style?.fills?.[0] };
+  });
+  expect(migrated.schema).toBe(2);
+  expect(migrated.pages).toBe(1);
+  expect(migrated.firstFill).toEqual({ type: "solid", color: "#123456" });
+});
+
+test("add-page creates a second screen that renders and persists", async ({ page }) => {
+  await page.goto("/");
+  await page.locator(".layer-row").first().waitFor();
+
+  await page.getByRole("button", { name: "+ 화면" }).click();
+  await expect(page.locator(".canvas-statusbar")).toContainText("2개 화면");
+  await expect(page.locator(".page-group")).toHaveCount(2);
+  await expect(canvasNodeCount(page)).resolves.toBe(54);
+  await page.waitForFunction(() => localStorage.getItem("design-studio-doc-v1")?.includes("Screen 2"));
+
+  await page.reload();
+  await page.locator(".canvas-statusbar").waitFor();
+  await expect(page.locator(".canvas-statusbar")).toContainText("2개 화면");
+});
+
+test("command palette sets dev status and shows the badge", async ({ page }) => {
+  await page.goto("/");
+  await page.locator(".layer-row").first().waitFor();
+
+  await page.locator(".layer-name").filter({ hasText: "Top Header Bar" }).click();
+  await page.keyboard.press("ControlOrMeta+k");
+  const palette = page.locator(".command-palette input");
+  await expect(palette).toBeVisible();
+  await palette.fill("개발준비");
+  await page.keyboard.press("Enter");
+  await expect(page.locator(".command-palette")).toHaveCount(0);
+
+  await expect(page.locator(".status-chip.ready").first()).toBeVisible();
+  await expect(page.locator(".status-dot.ready").first()).toBeVisible();
+
+  // The fixture's root screen ships with dev_status: "ready", so exactly the
+  // page-level chip remains after undoing the header's status change.
+  await page.keyboard.press("ControlOrMeta+z");
+  await expect(page.locator(".status-chip.ready")).toHaveCount(1);
+});
+
+test("context menu duplicates the right-clicked node", async ({ page }) => {
+  await page.goto("/");
+  await page.locator(".layer-row").first().waitFor();
+  const before = await canvasNodeCount(page);
+
+  await page.locator(".canvas-node > span").filter({ hasText: /AGENT-FIRST SPEC CONSOLE/ }).first().click({ button: "right" });
+  const menu = page.locator(".context-menu");
+  await expect(menu).toBeVisible();
+  await menu.getByRole("button", { name: "복제 (⌘D)" }).click();
+
+  await expect(canvasNodeCount(page)).resolves.toBe(before + 1);
+});
+
+test("arrow keys nudge the selection", async ({ page }) => {
+  await page.goto("/");
+  await page.locator(".layer-row").first().waitFor();
+
+  // The page frame is free-positioned; select it via layers and nudge.
+  await page.locator(".layer-name").filter({ hasText: "EaseUI" }).first().click();
+  const before = await page.locator(".canvas-node.selected").first().boundingBox();
+  await page.keyboard.press("ArrowRight");
+  await page.keyboard.press("ArrowRight");
+  await page.keyboard.press("Shift+ArrowDown");
+  const after = await page.locator(".canvas-node.selected").first().boundingBox();
+  if (!before || !after) throw new Error("page node not measurable");
+  expect(Math.round(after.x - before.x)).toBeGreaterThanOrEqual(2 * 0.55);
+});
+
+test("gradient fill renders via inspector", async ({ page }) => {
+  await page.goto("/");
+  await page.locator(".layer-row").first().waitFor();
+
+  await page.locator(".layer-name").filter({ hasText: "Top Header Bar" }).click();
+  await page.getByRole("button", { name: "그라데이션으로" }).click();
+  const node = page.locator(".canvas-node.selected");
+  await expect(node).toHaveAttribute("style", /linear-gradient/);
+
+  await page.getByRole("button", { name: "섀도 추가" }).click();
+  await expect(node).toHaveAttribute("style", /box-shadow/);
+});
+
+test("align left equalizes x of two free frames", async ({ page }) => {
+  await page.goto("/");
+  await page.locator(".layer-row").first().waitFor();
+
+  // Fresh page has no auto-layout: created frames are free-positioned.
+  await page.getByRole("button", { name: "+ 화면" }).click();
+  await page.getByRole("button", { name: "F", exact: true }).click();
+  await page.locator(".canvas-viewport").click({ position: { x: 320, y: 150 } });
+  await page.getByRole("button", { name: "F", exact: true }).click();
+  await page.locator(".canvas-viewport").click({ position: { x: 700, y: 400 } });
+
+  const frames = page.locator(".page-group").nth(1).locator(".layer-name").filter({ hasText: "Frame" });
+  await frames.nth(0).click();
+  await frames.nth(1).click({ modifiers: ["Shift"] });
+  await expect(page.locator(".inspector-panel")).toContainText("2개 노드가 선택되었습니다");
+
+  await page.locator(".align-grid").getByRole("button", { name: "좌" }).click();
+  const boxes = await page.locator(".canvas-node.selected").evaluateAll((els) =>
+    els.map((el) => Math.round(el.getBoundingClientRect().x))
+  );
+  expect(boxes.length).toBe(2);
+  expect(Math.abs(boxes[0] - boxes[1])).toBeLessThanOrEqual(1);
+});
+
+test("fit-all shortcut changes the viewport zoom", async ({ page }) => {
+  await page.goto("/");
+  await page.locator(".layer-row").first().waitFor();
+
+  await page.getByRole("button", { name: "100%", exact: true }).click();
+  await expect(page.locator(".canvas-statusbar")).toContainText("100%");
+  await page.keyboard.press("Shift+1");
+  await expect(page.locator(".canvas-statusbar")).not.toContainText("100%");
 });

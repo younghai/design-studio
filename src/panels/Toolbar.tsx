@@ -31,11 +31,18 @@ export default function Toolbar({ variablesOpen, onToggleVariables }: ToolbarPro
   }
 
   function exportImage(kind: "svg" | "png"): void {
-    const placed = relayoutTree(state.doc.root);
-    const hit = state.primaryId ? findNode(placed, state.primaryId) : null;
-    const target = hit?.node ?? placed;
-    const base = target.name.replace(/\s+/g, "-").toLowerCase() || "node";
-    const svg = nodeToSvg(target, state.doc);
+    const placedPages = state.doc.pages.map((p) => relayoutTree(p));
+    let target: ReturnType<typeof relayoutTree> | null = null;
+    for (const page of placedPages) {
+      const hit = state.primaryId ? findNode(page, state.primaryId) : null;
+      if (hit) {
+        target = hit.node;
+        break;
+      }
+    }
+    const chosen = target ?? placedPages[0];
+    const base = chosen.name.replace(/\s+/g, "-").toLowerCase() || "node";
+    const svg = nodeToSvg(chosen, state.doc);
     if (kind === "svg") {
       downloadSvg(svg, `${base}.svg`);
       toast(`${base}.svg 내보냈습니다`);

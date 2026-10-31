@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import type { StudioNode } from "../model/types";
-import { findNode, useStore } from "../state/store";
+import { useStore } from "../state/store";
 import "./panels.css";
 
 interface RowProps {
@@ -38,15 +38,7 @@ function LayerRow({ node, depth, dropTargetId, setDropTargetId }: RowProps): Rea
         setDropTargetId(null);
         const draggedId = e.dataTransfer.getData("text/plain");
         if (!draggedId || draggedId === node.id) return;
-        const dragged = findNode(state.doc.root, draggedId);
-        const target = findNode(state.doc.root, node.id);
-        if (!dragged || !target || !dragged.parent || !target.parent) return;
-        let index = target.parent.children.findIndex((c) => c.id === node.id) + 1;
-        if (dragged.parent.id === target.parent.id) {
-          const draggedIndex = dragged.parent.children.findIndex((c) => c.id === draggedId);
-          if (draggedIndex < index) index -= 1;
-        }
-        dispatch({ type: "reorder", id: draggedId, parentId: target.parent.id, index });
+        dispatch({ type: "reorder", id: draggedId, parentId: node.id, index: 0 });
       }}
     >
       <span className="layer-kind">{node.kind === "text" ? "T" : node.kind === "frame" ? "#" : node.kind === "ellipse" ? "○" : "□"}</span>
@@ -66,6 +58,7 @@ function LayerRow({ node, depth, dropTargetId, setDropTargetId }: RowProps): Rea
       ) : (
         <span className="layer-name">{node.name}</span>
       )}
+      {node.devStatus !== "design" && <span className={`status-dot ${node.devStatus}`} title={node.devStatus} />}
       <button
         className="layer-eye"
         title={node.visible ? "숨기기" : "보이기"}
@@ -93,13 +86,34 @@ function TreeRows(props: { node: StudioNode; depth: number } & Pick<RowProps, "d
 }
 
 export default function LayersPanel(): React.ReactElement {
-  const { state } = useStore();
+  const { state, dispatch } = useStore();
   const [dropTargetId, setDropTargetId] = useState<string | null>(null);
 
   return (
-    <div className="layers-panel" onDragOver={(e) => e.preventDefault()}>
-      <div className="panel-header">레이어</div>
-      <TreeRows node={state.doc.root} depth={0} dropTargetId={dropTargetId} setDropTargetId={setDropTargetId} />
+    <div className="layers-panel" onDragOver={(e) => e.preventDefault()} role="tree" aria-label="레이어">
+      <div className="panel-header">
+        레이어
+        <button className="add-page" title="새 화면 추가" onClick={() => dispatch({ type: "add-page" })}>
+          + 화면
+        </button>
+      </div>
+      {state.doc.pages.map((page, i) => (
+        <div key={page.id} className="page-group">
+          <div className="page-group-header">
+            화면 {i + 1}
+            {state.doc.pages.length > 1 && (
+              <button
+                className="delete-page"
+                title="화면 삭제"
+                onClick={() => dispatch({ type: "delete-page", pageIndex: i })}
+              >
+                ✕
+              </button>
+            )}
+          </div>
+          <TreeRows node={page} depth={0} dropTargetId={dropTargetId} setDropTargetId={setDropTargetId} />
+        </div>
+      ))}
     </div>
   );
 }
