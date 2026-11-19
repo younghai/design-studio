@@ -147,11 +147,14 @@ function paintToCss(paint: Paint, doc: Document): string | null {
 
 function fillsToBackground(node: StudioNode, doc: Document): React.CSSProperties {
   const fills = node.style.fills;
-  const image = fills.find((f) => f.type === "image") as Extract<Paint, { type: "image" }> | undefined;
+  // An image paint with an empty src (just switched from solid, src not typed
+  // yet) must not clobber the background — fall through to the next paint.
+  const image = fills.find((f) => f.type === "image" && f.src.length > 0) as Extract<Paint, { type: "image" }> | undefined;
   if (image) {
     return { backgroundImage: `url("${image.src}")`, backgroundSize: "cover", backgroundPosition: "center" };
   }
   for (const f of fills) {
+    if (f.type === "image") continue;
     const css = paintToCss(f, doc);
     if (css) return { background: css };
   }
@@ -438,17 +441,20 @@ export default function CanvasView({ measureTick = 0 }: { measureTick?: number }
   function fitSelection(): void {
     const bounds = { left: Infinity, top: Infinity, right: -Infinity, bottom: -Infinity };
     let found = false;
+    function include(absX: number, absY: number, n: StudioNode): void {
+      found = true;
+      bounds.left = Math.min(bounds.left, absX);
+      bounds.top = Math.min(bounds.top, absY);
+      bounds.right = Math.max(bounds.right, absX + n.width);
+      bounds.bottom = Math.max(bounds.bottom, absY + n.height);
+    }
     function walk(node: StudioNode, absX: number, absY: number): void {
+      // Pages are selectable nodes too; ⇧2 on a page fits that page.
+      if (state.selectedIds.includes(node.id)) include(absX, absY, node);
       for (const c of node.children) {
         const cx = absX + c.x;
         const cy = absY + c.y;
-        if (state.selectedIds.includes(c.id)) {
-          found = true;
-          bounds.left = Math.min(bounds.left, cx);
-          bounds.top = Math.min(bounds.top, cy);
-          bounds.right = Math.max(bounds.right, cx + c.width);
-          bounds.bottom = Math.max(bounds.bottom, cy + c.height);
-        }
+        if (state.selectedIds.includes(c.id)) include(cx, cy, c);
         walk(c, cx, cy);
       }
     }
@@ -458,10 +464,16 @@ export default function CanvasView({ measureTick = 0 }: { measureTick?: number }
 
   // Exposed for keyboard shortcuts through a lightweight event contract.
   useEffect(() => {
-    const handler = () => fitTo(docBounds(placedPages));
-    window.addEventListener("ds-fit-all", handler);
-    return () => window.removeEventListener("ds-fit-all", handler);
-  }, [placedPages]);
+    const fitAll = () => fitTo(docBounds(placedPages));
+    const fitSel = () => fitSelection();
+    window.addEventListener("ds-fit-all", fitAll);
+    window.addEventListener("ds-fit-selection", fitSel);
+    return () => {
+      window.removeEventListener("ds-fit-all", fitAll);
+      window.removeEventListener("ds-fit-selection", fitSel);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [placedPages, state.selectedIds]);
 
   function toDoc(e: { clientX: number; clientY: number }): { x: number; y: number } {
     const rect = viewportRef.current?.getBoundingClientRect();
